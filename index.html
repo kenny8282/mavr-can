@@ -241,6 +241,54 @@ function findStep(id) { return allSteps().find(s => s.id === id); }
 // ESP32 mode only when served by the logger itself (or the test mock); anywhere else (a file, a web host on a
 // phone or PC) the page talks to a USB adapter. ?esp / ?usb force either.
 const USB = /[?&]usb\b/.test(location.search) || (!/[?&]esp\b/.test(location.search) && location.hostname !== '192.168.4.1' && location.port !== '8765');
+// ---------------- direct USB (WebUSB) driver for CDC-ACM serial adapters, for Android Chrome
+// Same shape as a Web Serial port (open / readable / writable / getInfo / close), so LL uses it unchanged.
+// The CANable/RH02 is a standard USB CDC serial device: claim its data interface and move bytes over the bulk endpoints.
+class UsbCdcPort {
+  constructor(dev) { this.dev = dev; this.readable = null; this.writable = null; this.alive = false; }
+  getInfo() { return { usbVendorId: this.dev.vendorId, usbProductId: this.dev.productId }; }
+  async open() {
+    const d = this.dev;
+    await d.open();
+    if (!d.configuration) await d.selectConfiguration(1);
+    let data = null, comm = null;
+    for (const itf of d.configuration.interfaces) {
+      const a = itf.alternates[0];
+      const bulkIn = a.endpoints.some(e => e.type === 'bulk' && e.direction === 'in'), bulkOut = a.endpoints.some(e => e.type === 'bulk' && e.direction === 'out');
+      if (a.interfaceClass === 0x02) comm = itf;
+      if (bulkIn && bulkOut && (!data || a.interfaceClass === 0x0A)) data = itf;
+    }
+    if (!data) throw new Error('This USB device has no serial data interface. Is it the CAN adapter?');
+    const alt = data.alternates[0], epIn = alt.endpoints.find(e => e.type === 'bulk' && e.direction === 'in'), epOut = alt.endpoints.find(e => e.type === 'bulk' && e.direction === 'out');
+    if (comm) try { await d.claimInterface(comm.interfaceNumber); } catch (e) {}
+    await d.claimInterface(data.interfaceNumber);
+    const ci = comm ? comm.interfaceNumber : data.interfaceNumber;
+    // SET_LINE_CODING 115200 8N1 and SET_CONTROL_LINE_STATE DTR+RTS, as a PC serial driver would send. Ignored if unsupported.
+    try { await d.controlTransferOut({ requestType: 'class', recipient: 'interface', request: 0x20, value: 0, index: ci }, new Uint8Array([0x00, 0xC2, 0x01, 0x00, 0, 0, 8])); } catch (e) {}
+    try { await d.controlTransferOut({ requestType: 'class', recipient: 'interface', request: 0x22, value: 0x03, index: ci }); } catch (e) {}
+    this.alive = true;
+    const size = Math.max(64, epIn.packetSize || 64) * 8;
+    this.readable = new ReadableStream({
+      start: c => { (async () => {
+        while (this.alive) {
+          let r;
+          try { r = await d.transferIn(epIn.endpointNumber, size); } catch (e) { break; }
+          if (r.status === 'stall') { try { await d.clearHalt('in', epIn.endpointNumber); } catch (e) { break; } continue; }
+          if (r.data && r.data.byteLength) c.enqueue(new Uint8Array(r.data.buffer.slice(r.data.byteOffset, r.data.byteOffset + r.data.byteLength)));
+        }
+        this.alive = false; this.readable = null; try { c.close(); } catch (e) {}
+      })(); },
+      cancel: () => { this.alive = false; }
+    });
+    this.writable = new WritableStream({ write: async chunk => { const r = await d.transferOut(epOut.endpointNumber, chunk); if (r.status !== 'ok') throw new Error('USB write ' + r.status); } });
+  }
+  async close() { this.alive = false; this.readable = null; try { await this.dev.close(); } catch (e) {} }
+}
+// Which link to use: Web Serial on a PC; direct USB on Android, where Chrome's serial picker doesn't list USB adapters.
+const IS_ANDROID = /Android/i.test(navigator.userAgent);
+let LINK = store.get('link', IS_ANDROID && 'usb' in navigator ? 'usb' : 'serial');
+function linkOk() { return LINK === 'usb' ? 'usb' in navigator : 'serial' in navigator; }
+function setLink(v) { LINK = v; store.set('link', v); }
 const SLCAN_RATE = { 125: '4', 250: '5', 500: '6', 750: '7', 1000: '8' };
 const FD_LEN = [0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 20, 24, 32, 48, 64];
 const LL = {
@@ -251,13 +299,13 @@ const LL = {
   nowUs() { return Math.round((performance.now() - this.t0) * 1000); },
 
   async connect(port) {
-    if (!('serial' in navigator)) throw new Error('This browser has no Web Serial. Open the file in Chrome or Edge.');
+    if (!port && !linkOk()) throw new Error(LINK === 'usb' ? 'This browser has no direct USB support. Use Chrome.' : 'This browser has no Web Serial. Open the file in Chrome or Edge.');
     if (this.port) await this.disconnect();
-    port = port || await navigator.serial.requestPort();
+    if (!port) port = LINK === 'usb' ? new UsbCdcPort(await navigator.usb.requestDevice({ filters: [] })) : await navigator.serial.requestPort();
     await port.open({ baudRate: 115200, bufferSize: 1 << 20 });
     this.port = port; this.writer = port.writable.getWriter();
     const i = port.getInfo ? port.getInfo() : {};
-    this.info = i.usbVendorId ? 'USB ' + hex(i.usbVendorId, 4) + ':' + hex(i.usbProductId, 4) : 'USB serial';
+    this.info = (port instanceof UsbCdcPort ? 'direct USB ' : 'USB ') + (i.usbVendorId ? hex(i.usbVendorId, 4) + ':' + hex(i.usbProductId, 4) : 'serial');
     this.readLoop(port);
     await this.send('C'); await sleep(50); this.lineBuf = ''; this.textLines = [];
     await this.send('V'); await sleep(250);
@@ -417,15 +465,24 @@ const LL = {
     throw new Error(path + ' 404');
   }
 };
-if (USB && 'serial' in navigator) {
+// Re-open an adapter this page was already given permission for, so a reload doesn't need a click.
+if (USB && LINK === 'serial' && 'serial' in navigator) {
   navigator.serial.addEventListener('disconnect', e => { if (e.target === LL.port) { LL.on = false; } });
-  // Re-open an adapter this page was already given permission for, so a reload doesn't need a click.
   navigator.serial.getPorts().then(ps => { if (ps.length === 1) LL.connect(ps[0]).catch(() => {}); });
+}
+if (USB && LINK === 'usb' && 'usb' in navigator) {
+  navigator.usb.addEventListener('disconnect', e => { if (LL.port && LL.port.dev === e.device) { LL.on = false; LL.port.alive = false; } });
+  navigator.usb.getDevices().then(ds => { if (ds.length === 1) LL.connect(new UsbCdcPort(ds[0])).catch(() => {}); });
 }
 async function usbConnect() {
   if (FS.dir && !FS.ok()) await FS.resume();
   try { await LL.connect(); return true; }
-  catch (e) { if (e.name !== 'NotFoundError') alert('Could not open the adapter: ' + e.message + '\n\nClose any other program using the COM port (SavvyCAN, Cangaroo, a serial monitor) and try again.'); return false; }
+  catch (e) {
+    if (e.name !== 'NotFoundError') alert('Could not open the adapter: ' + e.message + (LINK === 'usb'
+      ? '\n\nUnplug and replug the adapter, close any other app using it (e.g. Serial USB Terminal), then try again.'
+      : '\n\nClose any other program using the COM port (SavvyCAN, Cangaroo, a serial monitor) and try again.'));
+    return false;
+  }
   finally { pollStatus(); }
 }
 // ---------------- auto-save folder (File System Access API: Chrome / Edge on a PC)
@@ -665,8 +722,9 @@ function renderPlan() {
   h = saveBanner() + h;
   if (recovered.length) h = `<div class="card"><h2>Interrupted run found</h2><p class="small">The page closed while recording. Checkpoints were kept for: ${recovered.map(esc).join(', ')}.</p>
     ${recovered.map(id => `<button class="btn pri" data-rec="${esc(id)}">Rebuild ${esc(id)} files</button>`).join('')}</div>` + h;
-  if (USB && !LL.port) h = `<div class="card"><h2>Connect the CAN adapter</h2><p class="small mut">${'serial' in navigator ? 'Plug in the USB-CAN adapter (termination jumper OFF), then pick its COM port.' : 'This browser has no Web Serial. Open this file in Chrome or Edge.'}</p>
-    <button class="btn pri big" id="usbGo" ${'serial' in navigator ? '' : 'disabled'}>Connect adapter</button></div>` + h;
+  if (USB && !LL.port) h = `<div class="card"><h2>Connect the CAN adapter</h2><p class="small mut">${linkOk() ? 'Plug in the USB-CAN adapter (termination jumper OFF), then ' + (LINK === 'usb' ? 'pick it in the USB device list.' : 'pick its COM port.') : 'This browser cannot reach USB devices. Use Chrome' + (IS_ANDROID ? ' on Android.' : ' or Edge.')}</p>
+    <button class="btn pri big" id="usbGo" ${linkOk() ? '' : 'disabled'}>Connect adapter</button>
+    <p class="small mut">Connection: ${LINK === 'usb' ? 'direct USB' : 'serial port'} · <a href="#" id="linkSw" style="color:var(--blue)">${LINK === 'usb' ? 'use serial port instead' : 'adapter not listed? use direct USB'}</a></p></div>` + h;
   PLAN.forEach(st => {
     h += `<h3>${esc(st.title)}</h3><div class="card">`;
     st.steps.forEach(s => {
@@ -679,6 +737,7 @@ function renderPlan() {
   $('#tab-plan').innerHTML = h;
   document.querySelectorAll('#tab-plan .step').forEach(e => e.onclick = () => openStep(e.dataset.id));
   const ug = $('#usbGo'); if (ug) ug.onclick = async () => { if (await usbConnect()) renderPlan(); };
+  const ls = $('#linkSw'); if (ls) ls.onclick = e => { e.preventDefault(); setLink(LINK === 'usb' ? 'serial' : 'usb'); renderPlan(); };
   const sb = $('#saveBtn'); if (sb) sb.onclick = saveBannerClick;
   document.querySelectorAll('[data-rec]').forEach(b => b.onclick = () => rebuildRecovered(b.dataset.rec));
 }
@@ -1341,7 +1400,8 @@ function renderSetup() {
   if (USB) {
     $('#tab-setup').innerHTML = `<div class="card"><h2>USB CAN adapter</h2>
     <p class="small">${LL.port ? '✓ Connected · ' + esc(LL.info) + (LL.ver ? ' · fw ' + esc(LL.ver) : '') + (LL.on ? ' · listen-only at ' + LL.kbps + ' kbps' : ' · <b>bus closed</b>') : 'Not connected.'}</p>
-    ${'serial' in navigator ? '' : '<div class="warn">This browser has no Web Serial. Open this file in Chrome or Edge.</div>'}
+    ${linkOk() ? '' : '<div class="warn">This browser cannot reach USB devices this way. Use Chrome' + (IS_ANDROID ? '' : ' or Edge') + ', or switch the connection type below.</div>'}
+    <p class="small">Connection type: <select id="linkSel" style="width:auto;padding:4px"><option value="serial" ${LINK === 'serial' ? 'selected' : ''}>Serial port (PC)</option><option value="usb" ${LINK === 'usb' ? 'selected' : ''}>Direct USB (Android)</option></select></p>
     <button class="btn pri" id="ucon">${LL.port ? 'Reconnect / pick another' : 'Connect adapter'}</button>${LL.port ? '<button class="btn" id="udis">Disconnect</button>' : ''}
     <p class="small mut">Pick the adapter's COM port (it shows as "USB Serial Device"). The app sends C, S6 (500k), M1 (listen-only) then O. Close SavvyCAN or any serial monitor first: only one program can hold the port.</p></div>
     ${bitCard}
@@ -1358,6 +1418,7 @@ function renderSetup() {
     <li>Keep this tab in front during runs. Recording continues in the background, but the beeps need the tab.</li>
     <li>Frame times are stamped when the PC receives them (about ±1–2 ms). Markers use the same clock.</li></ul></div>`;
     $('#ucon').onclick = async () => { await usbConnect(); renderSetup(); };
+    $('#linkSel').onchange = async () => { if (LL.port) await LL.disconnect(); setLink($('#linkSel').value); pollStatus(); renderSetup(); };
     const ud = $('#udis'); if (ud) ud.onclick = async () => { await LL.disconnect(); pollStatus(); renderSetup(); };
     const sd = $('#sdir'); if (sd) sd.onclick = async () => { await FS.choose(); renderSetup(); };
     const sr = $('#sres'); if (sr) sr.onclick = async () => { await FS.resume(); renderSetup(); };
