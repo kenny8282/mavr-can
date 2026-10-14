@@ -975,6 +975,7 @@ async function finishRun(r) {
   if (r.abort && prev.at && prev.saved && !confirm('Run aborted. Save it anyway and REPLACE the earlier ' + s.id + ' data?\n\nCancel keeps the earlier data.')) {
     await stopCheckpoints(true); lastRun = null; renderStep(); return;
   }
+  if (USB) RUNS.put(s.id, { at: new Date().toISOString(), bin: LL.runBin(), marks: data.marks.slice() });   // kept in the browser for the one-file bundle
   const sv = await saveRunFiles(s, data.frames, data.marks);
   await stopCheckpoints(sv.ok);
   const hist = (prev.history || []).concat(prev.at ? [{ at: prev.at, frames: prev.frames, aborted: !!prev.aborted }] : []).slice(-10);
@@ -1038,7 +1039,7 @@ async function removeRun(id) {
   const s = findStep(id), p = progress[id]; if (!p) return;
   if (!confirm('Remove ' + id + (s ? ' (' + s.title + ')' : '') + '?\n\nThis deletes its notes and results' + (FS.ok() && p.files ? ' and its files in ' + FS.dir.name : '') + '. It goes back to not done.')) return;
   if (FS.ok()) for (const f of p.files || []) await FS.remove(f);
-  delete progress[id]; removedIds[id] = new Date().toISOString(); store.set('removed', removedIds);
+  delete progress[id]; removedIds[id] = new Date().toISOString(); store.set('removed', removedIds); RUNS.del(id);
   if (lastRun && lastRun.stepId === id) lastRun = null;
   saveProgress();
 }
@@ -1078,6 +1079,70 @@ async function pollLive() {
   } catch (e) {}
 }
 
+// ---------------- run store + one-file bundle
+// Every finished run is kept in this browser (IndexedDB) as compact binary, so a whole session can be packed into
+// one .zip for decoding without hunting through Downloads. Runs recorded before this existed can be added by picking
+// their CSV files once.
+const RUNS = {
+  db() { return new Promise(res => { try { const r = indexedDB.open('mavr-runs', 1); r.onupgradeneeded = () => r.result.createObjectStore('runs'); r.onsuccess = () => res(r.result); r.onerror = () => res(null); } catch (e) { res(null); } }); },
+  async put(id, rec) { const d = await this.db(); if (!d) return false; return new Promise(res => { const q = d.transaction('runs', 'readwrite').objectStore('runs').put(rec, id); q.onsuccess = () => res(true); q.onerror = () => res(false); }); },
+  async get(id) { const d = await this.db(); if (!d) return null; return new Promise(res => { const q = d.transaction('runs').objectStore('runs').get(id); q.onsuccess = () => res(q.result || null); q.onerror = () => res(null); }); },
+  async keys() { const d = await this.db(); if (!d) return []; return new Promise(res => { const q = d.transaction('runs').objectStore('runs').getAllKeys(); q.onsuccess = () => res(q.result || []); q.onerror = () => res([]); }); },
+  async del(id) { const d = await this.db(); if (!d) return; return new Promise(res => { const q = d.transaction('runs', 'readwrite').objectStore('runs').delete(id); q.onsuccess = q.onerror = () => res(); }); },
+  async clear() { for (const k of await this.keys()) await this.del(k); }
+};
+// Minimal zip writer: deflate via CompressionStream when the browser has it, otherwise stored.
+const CRC_T = (() => { const t = new Int32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c; } return t; })();
+function crc32(u8) { let c = -1; for (let i = 0; i < u8.length; i++) c = CRC_T[(c ^ u8[i]) & 0xFF] ^ (c >>> 8); return (c ^ -1) >>> 0; }
+async function deflateRaw(u8) {
+  if (typeof CompressionStream === 'undefined') return null;
+  try { const cs = new CompressionStream('deflate-raw'); const w = cs.writable.getWriter(); w.write(u8); w.close(); return new Uint8Array(await new Response(cs.readable).arrayBuffer()); } catch (e) { return null; }
+}
+async function makeZip(entries, onProgress) {   // entries: [{name, data: Uint8Array|string}]
+  const parts = [], central = []; let off = 0, i = 0;
+  const le16 = n => [n & 255, (n >> 8) & 255], le32 = n => [n & 255, (n >> 8) & 255, (n >> 16) & 255, (n >>> 24) & 255];
+  const d = new Date(), dosT = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1), dosD = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+  for (const e of entries) {
+    if (onProgress) onProgress(++i, entries.length, e.name);
+    const raw = typeof e.data === 'string' ? new TextEncoder().encode(e.data) : e.data, name = new TextEncoder().encode(e.name);
+    const dfl = raw.length > 64 ? await deflateRaw(raw) : null, body = dfl && dfl.length < raw.length ? dfl : raw, method = body === dfl ? 8 : 0, crc = crc32(raw);
+    const hdr = new Uint8Array([0x50, 0x4B, 3, 4, ...le16(20), ...le16(0x0800), ...le16(method), ...le16(dosT), ...le16(dosD), ...le32(crc), ...le32(body.length), ...le32(raw.length), ...le16(name.length), ...le16(0), ...name]);
+    central.push(new Uint8Array([0x50, 0x4B, 1, 2, ...le16(20), ...le16(20), ...le16(0x0800), ...le16(method), ...le16(dosT), ...le16(dosD), ...le32(crc), ...le32(body.length), ...le32(raw.length), ...le16(name.length), ...le16(0), ...le16(0), ...le16(0), ...le16(0), ...le32(0), ...le32(off), ...name]));
+    parts.push(hdr, body); off += hdr.length + body.length;
+    await sleep(0);
+  }
+  const cdStart = off, cdLen = central.reduce((a, c) => a + c.length, 0);
+  const end = new Uint8Array([0x50, 0x4B, 5, 6, ...le16(0), ...le16(0), ...le16(central.length), ...le16(central.length), ...le32(cdLen), ...le32(cdStart), ...le16(0)]);
+  return new Blob([...parts, ...central, end], { type: 'application/zip' });
+}
+// Pack everything: session.json, summary, sim profile, every stored run (as CSV + markers), plus any files picked.
+async function exportBundle(pickedFiles) {
+  const st = $('#bundleStatus'); const say = t => { if (st) st.textContent = t; };
+  const entries = [];
+  entries.push({ name: 'session.json', data: JSON.stringify({ tool: 'MavR CAN Capture', format: 1, exported: new Date().toISOString(), mode: USB ? 'usb' : 'esp32', adapter: USB ? (LL.ver + ' ' + LL.info).trim() : undefined, kbps: status && status.kbps, session, runs: progress }, null, 1) });
+  entries.push({ name: 'Session_Summary.csv', data: summaryCsv() });
+  entries.push({ name: 'shifter_sim_profile.json', data: JSON.stringify(simProfile, null, 1) });
+  const have = new Set();
+  for (const f of pickedFiles || []) { entries.push({ name: f.name, data: new Uint8Array(await f.arrayBuffer()) }); have.add(f.name); }
+  for (const id of await RUNS.keys()) {
+    const r = await RUNS.get(id); if (!r) continue;
+    const s = findStep(id), base = s ? baseName(s) : id;
+    if (have.has(base + '.csv')) continue;
+    say('Packing ' + id + '…');
+    entries.push({ name: base + '.csv', data: csvSavvy(parseBin(r.bin)) }, { name: base + '_markers.csv', data: csvMarks(r.marks) });
+  }
+  if (FS.ok()) for (const n of await FS.list()) {   // files the folder has that nothing else covered (e.g. recovered runs)
+    if (!/\.csv$/i.test(n) || entries.some(e => e.name === n)) continue;
+    const t = await FS.read(n); if (t) entries.push({ name: n, data: t });
+  }
+  const blob = await makeZip(entries, (i, n, name) => say('Zipping ' + i + '/' + n + ' ' + name));
+  const name = 'MavR_session_' + today() + '.zip';
+  if (FS.ok()) { try { const fh = await FS.dir.getFileHandle(name, { create: true }); const w = await fh.createWritable(); await w.write(blob); await w.close(); } catch (e) {} }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
+  say('✓ ' + name + ' · ' + entries.length + ' files · ' + (blob.size / 1048576).toFixed(1) + ' MB. Attach it in the chat.');
+  return { name, files: entries.length, bytes: blob.size };
+}
+
 // ---------------- runs / report
 function renderRuns() {
   const steps = allSteps().filter(s => progress[s.id] && progress[s.id].at);
@@ -1086,17 +1151,26 @@ function renderRuns() {
     <label class="row">Tap point<input type="text" id="sTap" value="${esc(session.tap || '')}" placeholder="shifter connector / diagnostic"></label>
     <label class="row">Battery voltage<input type="text" id="sBatt" value="${esc(session.batt || '')}"></label>
     <p class="small ${FS.ok() ? '' : 'mut'}">${FS.ok() ? '✓ Everything on this tab is auto-saved to <b>' + esc(FS.dir.name) + '</b>: session.json (complete) and Session_Summary.csv (Excel).' : 'No save folder: use the button below to download a report.'}</p>
-    <button class="btn ${FS.ok() ? '' : 'pri'}" id="rep">⬇ Download session report</button><button class="btn bad" id="reset">Start a new session</button></div>`;
+    <button class="btn" id="rep">⬇ Download session report</button><button class="btn bad" id="reset">Start a new session</button></div>
+    <div class="card"><h2>Send for decoding</h2>
+    <p class="small mut">Packs every run this page recorded, the notes and readings, and the simulator profile into one .zip to attach in the chat. Runs recorded before this feature existed aren't stored here: tap <b>Add run files</b>, pick them from Downloads (long-press to select many), then Bundle.</p>
+    <label class="btn">Add run files<input type="file" id="bundlePick" multiple accept=".csv" class="hide"></label>
+    <button class="btn pri" id="bundleGo">⬇ Bundle everything (.zip)</button>
+    <p class="small" id="bundleStatus"></p></div>`;
   h += '<div class="card"><h2>Runs recorded</h2><table><tr><th>Run</th><th>frames</th><th>tries</th><th>files</th><th>notes</th><th></th></tr>';
   steps.forEach(s => { const p = progress[s.id]; h += `<tr data-id="${s.id}"><td><b>${s.id}</b> ${p.done ? '✓' : ''}<br><span class="mut small">${esc(s.title)}</span></td><td>${p.frames || (s.kind === 'check' ? 'readings' : '')}</td><td>${p.attempts || 1}</td><td>${s.kind === 'check' ? '' : p.saved ? 'saved' : '<span style="color:var(--bad)">not saved</span>'}</td><td class="small">${esc(p.notes || '')}</td><td><button class="btn bad" style="padding:4px 8px;font-size:13px" data-rm="${s.id}">✕</button></td></tr>`; });
   $('#tab-runs').innerHTML = h + '</table></div>';
   ['sDate', 'sTap', 'sBatt'].forEach(k => $('#' + k).oninput = () => { session[{ sDate: 'date', sTap: 'tap', sBatt: 'batt' }[k]] = $('#' + k).value; store.set('session', session); FS.queue(); });
   document.querySelectorAll('#tab-runs [data-rm]').forEach(b => b.onclick = ev => { ev.stopPropagation(); removeRun(b.dataset.rm).then(renderRuns); });
+  let picked = [];
+  $('#bundlePick').onchange = e => { picked = [...e.target.files]; $('#bundleStatus').textContent = picked.length + ' file(s) added. Now tap Bundle.'; };
+  $('#bundleGo').onclick = () => exportBundle(picked).catch(e => { $('#bundleStatus').textContent = 'Failed: ' + e.message; });
+  RUNS.keys().then(k => { const st = $('#bundleStatus'); if (st && !st.textContent) st.textContent = k.length + ' run(s) stored in this browser.'; });
   $('#rep').onclick = () => download(today() + '_session_report.json', JSON.stringify({ tool: 'MavR CAN Logger', mode: USB ? 'usb' : 'esp32', adapter: USB ? LL.ver + ' ' + LL.info : undefined, fw: status && status.fw, kbps: status && status.kbps, session, progress }, null, 1), 'application/json');
   $('#reset').onclick = async () => {
     if (!confirm('Start a new session? This clears every result and note' + (FS.ok() ? ' in this browser and in ' + FS.dir.name + "'s session.json.\n\nA backup copy of session.json is written first, and the run CSV files are not deleted." : ' in this browser.'))) return;
     if (FS.ok()) { const t = await FS.read('session.json'); if (t) await FS.write('session_backup_' + new Date().toISOString().replace(/[:.]/g, '-') + '.json', t); }
-    progress = {}; removedIds = {}; store.set('removed', removedIds); saveProgress(); renderRuns();
+    progress = {}; removedIds = {}; store.set('removed', removedIds); saveProgress(); RUNS.clear(); renderRuns();
   };
   document.querySelectorAll('#tab-runs tr[data-id]').forEach(r => r.onclick = () => openStep(r.dataset.id));
 }
