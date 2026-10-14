@@ -1349,17 +1349,25 @@ let simLastRec = null;
 // (factory shifter or the simulator, whichever is sending 0x345). Everything here comes from the 2026-10-13 captures.
 // DECODE holds the value signals. Scale/offset are null until decoded from the run files (RPM: S2-2, speed: S3-1,
 // throttle: S1-12, gear value: S2-3); until then the gauge shows the raw bytes.
+// Decoded 2026-10-13 from S2-2 (RPM), S3-1 (speed), S2-3 (gear), S1-12 (throttle):
+//  RPM      0x102 bytes 0-1 big-endian x 0.25 (100 Hz). Idle in Park reads 1,800 on every run; 0x300 bytes 0-1 is the same signal /25.
+//  Speed    0x344 bytes 2-3 big-endian, 0.01 km/h (100 Hz). Zero at a stop; the 5/10/20 mph holds read 6.2/10.4/21.1 mph.
+//  Gear     0x309 byte 0 bits 6-7: 3 = P, 2 = N, 0 = D, 1 = R. Bits 4-5 = range (2 = High, 1 = Low). Low nibble = gear number in D.
+//           Byte 2 bits 0-1 = brake (3 = pressed). Byte 3 bits 0-1 = mode (1 = auto, 2 = manual). Polarities for Low/Manual are
+//           inferred from which bits flipped in S1-5/S1-6/S2-8; confirm on the car.
+//  Throttle 0x103 byte 0, 0-255 = 0-100 % pedal.
 const DECODE = {
-  rpm:   { id: 0x390, hi: 0, lo: 1, scale: null, offset: 0, max: 9000, note: 'candidates 0x390 / 0x300 / 0x102' },
-  speed: { id: 0x392, hi: 1, lo: 2, scale: null, offset: 0, max: 100, note: 'candidate 0x392 bytes 1-4' },
-  gear:  { id: 0x309, byte: 0, mask: 0xC0, map: null, note: '0x309 b0 bits 6-7 + b1 bits 5-7; 0x530 b3; 0x227' },
+  rpm:   { id: 0x102, hi: 0, lo: 1, scale: 0.25, offset: 0, max: 9000 },
+  speed: { id: 0x344, hi: 2, lo: 3, scale: 0.01 / 1.609344, offset: 0, max: 100 },
+  gear:  { id: 0x309, byte: 0, mask: 0xC0, map: { 3: 'P', 2: 'N', 0: 'D', 1: 'R' }, numMask: 0x0F },
+  thr:   { id: 0x103, byte: 0, mask: 0xFF, scale: 100 / 255 },
 };
 const DASH_IN = [['P', 0], ['R', 2], ['N', 1], ['D', 3], ['L', 4], ['M', 5]];            // 0x345 byte 0 bits
 const DASH_OUT = [
   { id: 0x308, byte: 5, bit: 2, label: 'OVR', note: 'override, 0x308' },
-  { id: 0x309, byte: 2, mask: 0x03, label: 'BRK', note: 'brake, 0x309 b2' },
-  { id: 0x309, byte: 3, mask: 0x03, label: 'MAN', note: 'manual mode, 0x309 b3' },
-  { id: 0x309, byte: 0, mask: 0x30, label: 'LOW', note: 'low range, 0x309 b0' },
+  { id: 0x309, byte: 2, mask: 0x03, on: 0x03, label: 'BRK', note: 'brake, 0x309 b2 = 3' },
+  { id: 0x309, byte: 3, mask: 0x03, on: 0x02, label: 'MAN', note: 'manual mode, 0x309 b3 = 2 (1 = auto)' },
+  { id: 0x309, byte: 0, mask: 0x30, on: 0x10, label: 'LOW', note: 'low range, 0x309 b0 bits 4-5 = 1 (2 = high)' },
   { id: 0x103, byte: 2, bit: 3, label: 'REF', note: 'request refused, 0x103 b2.3' },
   { id: 0x100, byte: 1, bit: 7, label: 'RUN', note: 'engine running?, 0x100 b1.7 (S2-0)' },
 ];
@@ -1370,8 +1378,8 @@ function dashFrame(id) {
 }
 function dashValue(dc) {
   const f = dashFrame(dc.id); if (!f || f.age > 1500) return { v: null, raw: '' };
-  if (dc.map) { const sh = maskShift(dc.mask), k = (f.d[dc.byte] & dc.mask) >> sh; return { v: dc.map[k] != null ? dc.map[k] : '?', raw: hex(f.d[dc.byte], 2) }; }
-  if (dc.byte != null) return { v: null, raw: hex(f.d[dc.byte], 2) + (dc.mask !== 0xFF ? '' : '') };
+  if (dc.map) { const sh = maskShift(dc.mask), k = (f.d[dc.byte] & dc.mask) >> sh, g = dc.map[k]; return { v: g != null ? g : '?', num: dc.numMask ? f.d[dc.byte] & dc.numMask : 0, raw: hex(f.d[dc.byte], 2) }; }
+  if (dc.byte != null) { const sh = maskShift(dc.mask), raw = (f.d[dc.byte] & dc.mask) >> sh; return { v: dc.scale == null ? null : raw * dc.scale, raw: hex(f.d[dc.byte], 2) }; }
   const raw = (f.d[dc.hi] << 8) | f.d[dc.lo];
   return { v: dc.scale == null ? null : raw * dc.scale + dc.offset, raw: hex(f.d[dc.hi], 2) + ' ' + hex(f.d[dc.lo], 2) };
 }
@@ -1391,20 +1399,20 @@ function gaugeSvg(id, label, ticks, frac, centre, sub, warnFrom) {
 function renderDash() {
   const box = $('#dash'); if (!box) return;
   const f345 = dashFrame(0x345), src = f345 ? (f345.src === 'SIM' ? 'SIM' : f345.age < 1500 ? 'FACTORY' : '—') : '—';
-  const rpm = dashValue(DECODE.rpm), spd = dashValue(DECODE.speed), gear = dashValue(DECODE.gear);
-  // gear letter: the ECU's decoded gear once known; until then the shifter's own request (lever/buttons) so the dial is useful now
-  let gl = gear.v != null ? gear.v : '·';
+  const rpm = dashValue(DECODE.rpm), spd = dashValue(DECODE.speed), gear = dashValue(DECODE.gear), thr = dashValue(DECODE.thr);
+  // gear letter from the ECU (0x309); in D the gear number follows it. Engine off: falls back to what the shifter is requesting.
+  let gl = gear.v != null ? gear.v + (gear.v === 'D' && gear.num ? gear.num : '') : '·';
   if (gear.v == null && f345 && f345.age < 1500) { const b = f345.d[0]; gl = b & 1 ? 'P' : b & 4 ? 'R' : b & 2 ? 'N' : b & 8 ? 'D' : '·'; }
   let h = `<div class="gauges">` +
     gaugeSvg('gRpm', 'RPM × 1000', ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'], rpm.v == null ? null : rpm.v / DECODE.rpm.max, gl, rpm.v == null ? (rpm.raw ? 'raw ' + rpm.raw : 'no data') : Math.round(rpm.v) + ' rpm', 8000 / 9000) +
-    gaugeSvg('gSpd', 'MPH', ['0', '20', '40', '60', '80', '100'], spd.v == null ? null : spd.v / DECODE.speed.max, spd.v == null ? '--' : Math.round(spd.v), spd.v == null ? (spd.raw ? 'raw ' + spd.raw : 'no data') : 'mph', null) +
+    gaugeSvg('gSpd', 'MPH', ['0', '20', '40', '60', '80', '100'], spd.v == null ? null : spd.v / DECODE.speed.max, spd.v == null ? '--' : Math.round(spd.v), spd.v == null ? (spd.raw ? 'raw ' + spd.raw : 'no data') : (thr.v == null ? 'mph' : 'throttle ' + Math.round(thr.v) + ' %'), null) +
     `</div><div class="ind">`;
   const inOn = f345 && f345.age < 1500;
   for (const [l, bit] of DASH_IN) h += `<span class="ind-l ${inOn && (f345.d[0] >> bit) & 1 ? 'on' : ''} ${inOn ? '' : 'stale'}">${l}</span>`;
   h += `<span class="ind-src">${src}</span>`;
   for (const s of DASH_OUT) {
     const f = dashFrame(s.id), stale = !f || f.age > 1500;
-    const on = f && !stale && (s.bit != null ? (f.d[s.byte] >> s.bit) & 1 : (f.d[s.byte] & s.mask) !== 0);
+    const on = f && !stale && (s.bit != null ? (f.d[s.byte] >> s.bit) & 1 : s.on != null ? (f.d[s.byte] & s.mask) === s.on : (f.d[s.byte] & s.mask) !== 0);
     h += `<span class="ind-l ${on ? 'on' : ''} ${stale ? 'stale' : ''}" title="${esc(s.note)}">${s.label}</span>`;
   }
   box.innerHTML = h + '</div>';
