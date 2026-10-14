@@ -47,6 +47,13 @@ label.row{display:block;margin:8px 0}
 .toggle{display:flex;gap:6px}.toggle button{flex:1}
 .hide{display:none!important}
 .pad{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.dashgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;margin:6px 0}
+.dashgrid.out{grid-template-columns:repeat(5,1fr)}.dashgrid.g{grid-template-columns:repeat(3,1fr)}
+.dl{background:#0b0e10;border:1px solid var(--line);border-radius:8px;padding:8px 4px;text-align:center;font-size:20px;font-weight:700;color:#3a4148;min-height:44px}
+.dl small{display:block;font-size:11px;font-weight:400;color:var(--mut);margin-bottom:2px}
+.dl.on{color:#111;background:var(--acc);border-color:var(--acc)}.dl.on small{color:#333}
+.dl.stale{opacity:.35}.dashgrid.g .dl{font-size:14px;color:var(--text)}
+@media (max-width:600px){.dashgrid{grid-template-columns:repeat(4,1fr)}.dashgrid.out{grid-template-columns:repeat(3,1fr)}.dashgrid.g{grid-template-columns:repeat(2,1fr)}}
 .padb{border:2px solid var(--line);background:#20272c;color:var(--text);border-radius:14px;padding:22px 6px;font-size:22px;touch-action:none;user-select:none;-webkit-user-select:none}
 .padb small{display:block;font-size:12px;color:var(--mut);font-weight:400;margin-top:4px}
 .padb.held{background:var(--acc);color:#111;border-color:var(--acc)}.padb.held small{color:#111}
@@ -1340,7 +1347,61 @@ async function simRecToggle() {
 let simLastRec = null;
 
 // ---- UI
+// ---------------- digital dash: decoded live from the bus (factory shifter or the simulator, whichever is sending)
+// Signal map from the 2026-10-13 captures. 'bit' = one flag; 'field' = a multi-bit value shown raw until its scaling is decoded.
+// kind: 'in' = shifter request (0x345), 'out' = what the ECU reports.
+const DASH_SIGNALS = [
+  { id: 0x345, byte: 0, bit: 0, label: 'P', kind: 'in' }, { id: 0x345, byte: 0, bit: 2, label: 'R', kind: 'in' },
+  { id: 0x345, byte: 0, bit: 1, label: 'N', kind: 'in' }, { id: 0x345, byte: 0, bit: 3, label: 'D', kind: 'in' },
+  { id: 0x345, byte: 0, bit: 4, label: 'L', kind: 'in' }, { id: 0x345, byte: 0, bit: 5, label: 'M', kind: 'in' },
+  { id: 0x308, byte: 5, bit: 2, label: 'OVERRIDE', kind: 'in', note: 'S1-9' },
+  { id: 0x309, byte: 2, mask: 0x03, label: 'Brake', kind: 'out', note: 'S1-11, 5/5' },
+  { id: 0x309, byte: 3, mask: 0x03, label: 'Manual', kind: 'out', note: 'S1-5, S2-5' },
+  { id: 0x309, byte: 0, mask: 0x30, label: 'Low', kind: 'out', note: 'S1-6, S2-8' },
+  { id: 0x309, byte: 0, mask: 0xC0, label: 'Gear A', kind: 'out', note: '0x309 b0 bits 6-7, S2-3' },
+  { id: 0x309, byte: 1, mask: 0xE0, label: 'Gear B', kind: 'out', note: '0x309 b1 bits 5-7, S2-3' },
+  { id: 0x530, byte: 3, mask: 0x18, label: 'Gear C', kind: 'out', note: '0x530 b3 bits 3-4, S2-3 / S4' },
+  { id: 0x227, byte: 0, mask: 0xFF, label: '0x227 b0', kind: 'out', note: 'direct changes, S2-11' },
+  { id: 0x227, byte: 1, mask: 0xFF, label: '0x227 b1', kind: 'out', note: 'direct changes, S2-11' },
+  { id: 0x103, byte: 2, bit: 3, label: 'Refused', kind: 'out', note: 'no-brake D/R, S2-4' },
+  { id: 0x1B8, byte: 3, mask: 0xFF, label: '0x1B8 b3', kind: 'out', note: 'refusals, paddle at stop' },
+];
+// Gauges: shown as raw bytes until the scaling is decoded from the run files (RPM: S2-2, speed: S3-1, throttle: S1-12).
+const DASH_GAUGES = [
+  { id: 0x390, label: 'RPM? 0x390', bytes: [0, 1] }, { id: 0x300, label: 'RPM? 0x300', bytes: [0, 1] }, { id: 0x102, label: '0x102', bytes: [0, 1, 2, 3] },
+  { id: 0x392, label: 'Speed? 0x392', bytes: [1, 2, 3, 4] }, { id: 0x103, label: 'Throttle? 0x103', bytes: [0, 1, 2, 3, 4, 5] }, { id: 0x391, label: '0x391', bytes: [2, 3, 4, 7] },
+];
+function dashFrame(id) {
+  // The simulator's own 0x345 when it is sending; otherwise the newest frame heard on the bus.
+  if (SIM.armed) { const i = simProfile.frames.findIndex(f => fullId(f) === id); if (i >= 0 && SIM.st[i] && SIM.st[i].last.length) return { d: SIM.st[i].last, age: 0, src: 'SIM' }; }
+  const e = USB ? LL.ids.get(id) : null; if (!e) return null;
+  return { d: e.d, age: performance.now() - e.last, src: 'bus' };
+}
+function renderDash() {
+  const box = $('#dash'); if (!box) return;
+  const f345 = dashFrame(0x345), src = f345 ? (f345.src === 'SIM' ? 'simulator' : f345.age < 1500 ? 'factory shifter' : 'stale') : 'none';
+  let h = `<div class="dashrow"><span class="mut small">Shifter on bus: <b>${src}</b></span></div><div class="dashgrid">`;
+  for (const s of DASH_SIGNALS.filter(x => x.kind === 'in')) {
+    const f = dashFrame(s.id), on = f && f.age < 1500 && (f.d[s.byte] >> s.bit) & 1, stale = !f || f.age >= 1500;
+    h += `<div class="dl ${on ? 'on' : ''} ${stale ? 'stale' : ''}">${esc(s.label)}</div>`;
+  }
+  h += '</div><div class="dashgrid out">';
+  for (const s of DASH_SIGNALS.filter(x => x.kind === 'out')) {
+    const f = dashFrame(s.id), stale = !f || f.age >= 1500;
+    let v = '—', on = false;
+    if (f) { if (s.bit != null) { on = !!((f.d[s.byte] >> s.bit) & 1); v = on ? '1' : '0'; } else { const sh = maskShift(s.mask); v = ((f.d[s.byte] & s.mask) >> sh); on = v !== 0; v = s.mask === 0xFF ? hex(v, 2) : String(v); } }
+    h += `<div class="dl ${on ? 'on' : ''} ${stale ? 'stale' : ''}" title="${esc(s.note || '')}"><small>${esc(s.label)}</small>${v}</div>`;
+  }
+  h += '</div><div class="dashgrid g">';
+  for (const g of DASH_GAUGES) {
+    const f = dashFrame(g.id), stale = !f || f.age >= 1500;
+    h += `<div class="dl mono ${stale ? 'stale' : ''}"><small>${esc(g.label)}</small>${f ? g.bytes.map(b => hex(f.d[b], 2)).join(' ') : '—'}</div>`;
+  }
+  h += '</div><p class="small mut">Lit = active. Grey = not seen for 1.5 s. RPM, speed, throttle and the ECU gear values show raw bytes until their scaling is decoded from the run files.</p>';
+  box.innerHTML = h;
+}
 function simLive() {
+  renderDash();
   const s3 = $('#simStep3');
   if (s3 && USB) { const t = performance.now(), seen = [...LL.ids].some(([id, e]) => (id & 0x1FFFFFFF) === MAVR_SHIFTER_ID && t - e.last < 1500);
     s3.innerHTML = (LL.port && !seen ? '<span style="color:var(--ok)">✓</span>' : '<span style="color:var(--bad)">✗</span>') + ' Unplug the factory shifter. ' + (seen ? '<b>0x345 is still on the bus.</b>' : LL.port ? '0x345 is not on the bus.' : ''); }
@@ -1361,7 +1422,8 @@ function renderSim() {
   const r = SIM.ready(), P = simProfile;
   const nowT = performance.now(), shifterSeen = USB && [...LL.ids].some(([id, e]) => (id & 0x1FFFFFFF) === MAVR_SHIFTER_ID && nowT - e.last < 1500);
   const hasFrame = P.frames.some(f => f.on), tick = ok => ok ? '<span style="color:var(--ok)">✓</span>' : '<span style="color:var(--bad)">✗</span>';
-  let h = `<div class="card"><h2>Shifter simulator</h2>
+  let h = `<div class="card"><h2>Dash</h2><div id="dash"></div></div>`;
+  h += `<div class="card"><h2>Shifter simulator</h2>
     <p class="small mut">Sends the shifter's frames in place of the factory shifter. Hold a pad button and it sends that button's bit, exactly like holding the real button. The button map for the Maverick R is already filled in.</p>
     <ol class="small" style="line-height:1.8">
       <li>${tick(LL.port && LL.on)} Adapter connected, bit rate set (Setup tab). Key ON.</li>
