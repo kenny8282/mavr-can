@@ -1104,9 +1104,18 @@ function renderRuns() {
 const SIM_BTNS = [['P', 'P'], ['R', 'R (lever)'], ['D', 'D (lever)'], ['N', 'N'], ['M', 'M'], ['L', 'L'], ['OVR', 'Override'], ['UP', 'Up paddle'], ['DN', 'Down paddle']];
 const SIM_KEYS = { p: 'P', r: 'R', d: 'D', n: 'N', m: 'M', l: 'L', o: 'OVR', arrowup: 'UP', arrowdown: 'DN' };
 const STEP_BTN = { 'S1-3': 'P', 'S1-4': 'N', 'S1-5': 'M', 'S1-6': 'L', 'S1-7': 'D', 'S1-8': 'R', 'S1-9': 'OVR', 'S1-10': 'UP' };
+// Decoded on 2026-10-13 from Kenny's Maverick R captures: every shifter button is one bit of 0x345 byte 0.
+const MAVR_BUTTONS = { P: '345:0.0=1', N: '345:0.1=1', R: '345:0.2=1', D: '345:0.3=1', L: '345:0.4=1', M: '345:0.5=1' };
+const MAVR_SHIFTER_ID = 0x345, MAVR_WATCH = '309 530 227';
+// The shifter's one message, read from S1-3_p-button.csv (2,860 frames): 0x345 every 20 ms, 8 bytes.
+// byte 0 = buttons, bytes 1-5 = 0, byte 6 = counter 0..15, byte 7 = CRC-8 SAE J1850 (poly 1D, init FF, xor FF) over bytes 0-6.
+const MAVR_FRAME = { on: true, id: 0x345, ext: false, period: 20, dlc: 8, data: [0, 0, 0, 0, 0, 0, 0, 0], counter: { byte: 6, mask: 0x0F },
+  checksum: { alg: 'crc8', poly: 0x1D, init: 0xFF, xorout: 0xFF, withId: false, byte: 7 }, source: 'S1-3 2026-10-13', frames: 2860 };
 let simProfile = store.get('sim', { updated: '', frames: [], buttons: {} });
+if (!Object.keys(simProfile.buttons || {}).length) simProfile.buttons = Object.assign({}, MAVR_BUTTONS);
+if (!simProfile.frames.length) simProfile.frames = [JSON.parse(JSON.stringify(MAVR_FRAME))];
 let simAllowed = false;            // "Allow sending" — per page load, never remembered
-let simSaveTimer = null, simRec = null, simLearn = null, simWatch = store.get('simWatch', '');
+let simSaveTimer = null, simRec = null, simLearn = null, simWatch = store.get('simWatch', MAVR_WATCH);
 
 function simSave() {
   simProfile.updated = new Date().toISOString(); store.set('sim', simProfile);
@@ -1168,7 +1177,7 @@ function detectChecksum(fr, id, dlc, counter) {
   const n = Math.min(fr.length, 300); if (n < 10) return null;
   let best = null;
   for (let b = 0; b < dlc; b++) {
-    if (counter && counter.byte === b && counter.mask === 0xFF) continue;
+    if (counter && counter.byte === b) continue;   // the counter byte is never the checksum
     let varies = false; for (let i = 1; i < n && !varies; i++) if (fr[i].d[b] !== fr[0].d[b]) varies = true;
     if (!varies) continue;
     for (const v of CK_VARIANTS) {
@@ -1210,7 +1219,7 @@ const SIM = {
     else if (!LL.port) r.push('Connect the CAN adapter (Setup).');
     else if (!LL.on) r.push('The bus is closed: set the bit rate in Setup.');
     if (!simAllowed) r.push('Sending is not allowed yet (switch above).');
-    if (!simProfile.frames.some(f => f.on)) r.push('No frames to send: learn the shifter frame from a capture first.');
+    if (!simProfile.frames.some(f => f.on)) r.push('No frame to send yet: do step 2 below (learn 0x345 from the bus).');
     return r;
   },
   async arm() {
@@ -1248,7 +1257,7 @@ const SIM = {
   },
   tick() {
     const now = performance.now();
-    if (now - this.last > 300) { this.stop('Timing stalled (' + Math.round(now - this.last) + ' ms). The frames must keep their rate, so sending stopped.'); return; }
+    if (now - this.last > 500) { this.stop('Timing stalled (' + Math.round(now - this.last) + ' ms). The frames must keep their rate, so sending stopped.'); return; }
     this.last = now;
     simProfile.frames.forEach((f, i) => {
       if (!f.on) return;
@@ -1282,6 +1291,34 @@ window.addEventListener('keydown', e => {
 });
 window.addEventListener('keyup', e => { const b = SIM_KEYS[e.key.toLowerCase()]; if (b) SIM.release(b); });
 
+// ---- learn the shifter frame from the live bus: 10 s of listening while the factory shifter is still plugged in
+let simListen = null;   // {left} while learning from the bus
+async function simLearnLive() {
+  if (!LL.port || !LL.on) { alert('Connect the adapter and set the bit rate first.'); return; }
+  if (LL.rec || runner) { alert('A recording is running. Finish it first.'); return; }
+  const now = performance.now();
+  if (![...LL.ids.values()].some(e => now - e.last < 1000)) { alert('No CAN traffic. Key on?'); return; }
+  simListen = { left: 10 }; renderSim();
+  await api('/api/start', 'POST', { run: 'LEARN' });
+  for (let i = 10; i > 0; i--) { simListen.left = i; const e = $('#simLiveLeft'); if (e) e.textContent = i; await sleep(1000); }
+  await api('/api/stop', 'POST');
+  const d = await fetchRun(); simListen = null;
+  const a = analyse(d.frames, [], []);
+  simLearn = { frames: d.frames, src: 'live ' + today(), ids: a.ids.filter(x => !(x.id & 0x20000000)) };
+  const want = simLearn.ids.find(x => (x.id & 0x1FFFFFFF) === MAVR_SHIFTER_ID);
+  if (want) { simLearnApply(want.id, true); }
+  else { renderSim(); alert('0x345 was not on the bus during those 10 s. Is the factory shifter plugged in and the key on? Pick the shifter ID from the list by hand if it is different.'); }
+}
+function simLearnApply(fid, quiet) {
+  const lf = learnFrame(simLearn.frames, fid, simLearn.src); if (!lf) return;
+  const i = simProfile.frames.findIndex(f => fullId(f) === fid);
+  if (i >= 0) { if (!quiet && !confirm('Replace the existing 0x' + idStr(fid) + ' frame?')) return; simProfile.frames[i] = lf; } else simProfile.frames.push(lf);
+  simSave(); if (quiet) simLearn = null; renderSim();
+  const msg = 'Learned 0x' + idStr(fid) + ': every ' + lf.period + ' ms, ' + lf.dlc + ' bytes, ' + lf.frames + ' frames seen\nCounter: ' + (lf.counter ? 'byte ' + lf.counter.byte + ' mask ' + hex(lf.counter.mask, 2) : 'none found') + '\nChecksum: ' + (lf.checksum ? ckName(lf.checksum) : 'none found');
+  if (!quiet) alert(msg); else simLastLearn = msg;
+}
+let simLastLearn = '';
+
 // ---- recording a simulator session: frames we send are logged as Tx, so you see cause and effect in one file
 async function simRecToggle() {
   if (!simRec) {
@@ -1304,6 +1341,9 @@ let simLastRec = null;
 
 // ---- UI
 function simLive() {
+  const s3 = $('#simStep3');
+  if (s3 && USB) { const t = performance.now(), seen = [...LL.ids].some(([id, e]) => (id & 0x1FFFFFFF) === MAVR_SHIFTER_ID && t - e.last < 1500);
+    s3.innerHTML = (LL.port && !seen ? '<span style="color:var(--ok)">✓</span>' : '<span style="color:var(--bad)">✗</span>') + ' Unplug the factory shifter. ' + (seen ? '<b>0x345 is still on the bus.</b>' : LL.port ? '0x345 is not on the bus.' : ''); }
   const sent = $('#simSent'); if (sent) sent.innerHTML = simProfile.frames.map((f, i) => { const st = SIM.st[i] || {}; return `<tr><td class="mono">0x${idStr(fullId(f))}</td><td>${f.on ? f.period + ' ms' : 'off'}</td><td class="mono">${(st.last || []).slice(0, f.dlc).map(b => hex(b, 2)).join(' ')}</td><td>${st.sent || 0}</td></tr>`; }).join('');
   const w = $('#simWatchTbl'); if (!w) return;
   const ids = simWatch.split(/[\s,]+/).filter(Boolean).map(x => ((x.length > 3 ? 0x80000000 : 0) | parseInt(x, 16)) >>> 0);
@@ -1319,8 +1359,16 @@ function simLive() {
 let simUiTimer = null;
 function renderSim() {
   const r = SIM.ready(), P = simProfile;
+  const nowT = performance.now(), shifterSeen = USB && [...LL.ids].some(([id, e]) => (id & 0x1FFFFFFF) === MAVR_SHIFTER_ID && nowT - e.last < 1500);
+  const hasFrame = P.frames.some(f => f.on), tick = ok => ok ? '<span style="color:var(--ok)">✓</span>' : '<span style="color:var(--bad)">✗</span>';
   let h = `<div class="card"><h2>Shifter simulator</h2>
-    <p class="small mut">Sends the shifter's frames in place of the factory shifter, built from what the captures found. Hold a pad button and it sends that button's bits, exactly like holding the real button.</p>
+    <p class="small mut">Sends the shifter's frames in place of the factory shifter. Hold a pad button and it sends that button's bit, exactly like holding the real button. The button map for the Maverick R is already filled in.</p>
+    <ol class="small" style="line-height:1.8">
+      <li>${tick(LL.port && LL.on)} Adapter connected, bit rate set (Setup tab). Key ON.</li>
+      <li id="simStep3">${tick(USB && LL.port && !shifterSeen)} Unplug the factory shifter. ${shifterSeen ? '<b>0x345 is still on the bus.</b>' : LL.port ? '0x345 is not on the bus.' : ''}</li>
+      <li>${tick(simAllowed)} Tick Allow sending, press Start, then hold a pad button.</li>
+    </ol>
+    <p class="small mut">The shifter message (0x345, every 20 ms, counter + CRC) and the button bits are built in from the 2026-10-13 captures.</p>
     ${SIM.msg ? `<div class="warn">Stopped: ${esc(SIM.msg)}</div>` : ''}
     ${USB ? `<label class="row"><input type="checkbox" id="simAllow" ${simAllowed ? 'checked' : ''} ${SIM.armed ? 'disabled' : ''}> Allow sending on this page (off every time the page opens)</label>` : ''}
     ${r.length && !SIM.armed ? '<ul class="small">' + r.map(x => '<li>' + esc(x) + '</li>').join('') + '</ul>' : ''}
@@ -1333,9 +1381,12 @@ function renderSim() {
   h += `<div class="card"><h2>Live</h2><h3>Sending</h3><table><tr><th>ID</th><th>period</th><th>last data sent</th><th>sent</th></tr><tbody id="simSent"></tbody></table>
     <h3>Watch (gear state, dash, etc.)</h3><input type="text" id="simW" placeholder="IDs to watch, hex, e.g. 1A0, 3C1" value="${esc(simWatch)}">
     <table><tbody id="simWatchTbl"></tbody></table></div>`;
-  // profile: frames
+  // profile: frames (advanced)
+  h += `<details class="card"><summary style="cursor:pointer;font-weight:600">Advanced: message details, learn from a capture, button map</summary>`;
   const runs = allSteps().filter(s => progress[s.id] && progress[s.id].saved && progress[s.id].savedTo && s.kind !== 'check');
-  h += `<div class="card"><h2>Frames to send</h2>
+  h += `<div><h2>Frames to send</h2>
+    ${simListen ? `<b>listening… <span id="simLiveLeft">${simListen.left}</span> s</b>` : `<button class="btn" id="simLiveBtn" ${LL.port && LL.on && !SIM.armed ? '' : 'disabled'}>Re-learn 0x345 from the bus (10 s)</button>`}
+    ${simLastLearn ? `<div class="cand mono small" style="white-space:pre-line">${esc(simLastLearn)}</div>` : ''}
     <p class="small mut">Learn copies a frame from a capture: its period, normal data, rolling counter and checksum (found by testing the common checksum types against every frame). Edit anything after.</p>
     <table><tr><th>on</th><th>ID</th><th>ms</th><th>DLC</th><th>data (hex)</th><th>counter</th><th>checksum</th><th></th></tr>` +
     P.frames.map((f, i) => `<tr><td><input type="checkbox" data-fo="${i}" ${f.on ? 'checked' : ''}></td><td class="mono">0x${idStr(fullId(f))}</td>
@@ -1343,16 +1394,18 @@ function renderSim() {
       <td><input type="text" data-fd="${i}" class="mono" value="${f.data.slice(0, f.dlc).map(b => hex(b, 2)).join(' ')}"></td>
       <td class="small mono">${f.counter ? 'byte ' + f.counter.byte + ' &' + hex(f.counter.mask, 2) : 'none'}</td><td class="small mono">${esc(ckName(f.checksum))}</td>
       <td><button class="btn bad" style="padding:4px 8px;font-size:13px" data-fx="${i}" ${SIM.armed ? 'disabled' : ''}>✕</button></td></tr>`).join('') + '</table>';
-  h += `<h3>Learn a frame from a capture</h3>
+  h += `<h3>Or learn a frame from a saved capture</h3>
     <select id="simSrc"><option value="">choose a run…</option>${lastRun ? `<option value="__last">Last run in this page (${esc(lastRun.stepId)})</option>` : ''}${runs.map(s => `<option value="${s.id}">${s.id} ${esc(s.title)} (saved)</option>`).join('')}</select>
     ${simLearn ? `<select id="simId">${simLearn.ids.map(x => `<option value="${x.id}">0x${idStr(x.id)} · ${x.hz.toFixed(0)} Hz · ${x.n} frames</option>`).join('')}</select><button class="btn pri" id="simLearnGo" ${SIM.armed ? 'disabled' : ''}>Learn this frame</button>` : ''}
     <p class="small mut">The shifter's own frames are the IDs that went silent in S1-13 (shifter unplugged).</p></div>`;
   // profile: buttons
-  h += `<div class="card"><h2>Button map</h2><p class="small mut">Filled by "→ Sim" on a test's results, or typed: <span class="mono">2F0:1.0=1</span> = ID 2F0, byte 1, bit 0 set to 1 while held. <span class="mono">2F0:3&0F=05</span> = byte 3, mask 0F, value 05. Several are separated by spaces.</p><table>` +
+  h += `<div><h2>Button map</h2><p class="small mut">Filled by "→ Sim" on a test's results, or typed: <span class="mono">2F0:1.0=1</span> = ID 2F0, byte 1, bit 0 set to 1 while held. <span class="mono">2F0:3&0F=05</span> = byte 3, mask 0F, value 05. Several are separated by spaces.</p><table>` +
     SIM_BTNS.map(([k, label]) => { const bad = parseEdits(P.buttons[k]).filter(x => x.bad); return `<tr><td><b>${esc(label)}</b></td><td><input type="text" class="mono" data-bm="${k}" value="${esc(P.buttons[k] || '')}">${bad.length ? '<div class="small" style="color:var(--bad)">Not understood: ' + bad.map(x => esc(x.bad)).join(' ') + '</div>' : ''}</td></tr>`; }).join('') +
     `</table><button class="btn" id="simExp">⬇ Export profile</button><label class="btn">⬆ Import<input type="file" id="simImp" accept=".json" class="hide"></label>
-    <p class="small mut">${FS.ok() ? 'Auto-saved to ' + esc(FS.dir.name) + '\\shifter_sim_profile.json. This is also the starting data for the backup board firmware.' : 'Saved in this browser. Choose a save folder to keep it with the captures.'}</p></div>`;
+    <p class="small mut">${FS.ok() ? 'Auto-saved to ' + esc(FS.dir.name) + '\\shifter_sim_profile.json. This is also the starting data for the backup board firmware.' : 'Saved in this browser. Choose a save folder to keep it with the captures.'}</p></div>
+    <button class="btn" id="simReset">Reset to the built-in Maverick R profile</button></details>`;
   $('#tab-sim').innerHTML = h;
+  $('#simReset').onclick = () => { if (confirm('Replace the frames and button map with the built-in Maverick R values?')) { simProfile.frames = [JSON.parse(JSON.stringify(MAVR_FRAME))]; simProfile.buttons = Object.assign({}, MAVR_BUTTONS); simSave(); renderSim(); } };
   // bindings
   const al = $('#simAllow'); if (al) al.onchange = () => { if (al.checked && !confirm('Allow this page to transmit on the vehicle CAN bus?\n\nNothing is sent until you press Start simulator, and the checks run again then.')) al.checked = false; simAllowed = al.checked; renderSim(); };
   const ar = $('#simArm'); if (ar) ar.onclick = () => SIM.arm();
@@ -1370,6 +1423,7 @@ function renderSim() {
   document.querySelectorAll('[data-fd]').forEach(c => c.onchange = () => { const f = P.frames[+c.dataset.fd], b = c.value.replace(/[^0-9a-f]/gi, '').match(/../g) || []; for (let i = 0; i < 8; i++) f.data[i] = i < b.length ? parseInt(b[i], 16) : f.data[i]; simSave(); renderSim(); });
   document.querySelectorAll('[data-fx]').forEach(c => c.onclick = () => { if (confirm('Remove this frame from the simulator?')) { P.frames.splice(+c.dataset.fx, 1); simSave(); renderSim(); } });
   document.querySelectorAll('[data-bm]').forEach(c => c.onchange = () => { P.buttons[c.dataset.bm] = c.value.trim(); simSave(); renderSim(); });
+  const lb = $('#simLiveBtn'); if (lb) lb.onclick = () => simLearnLive().catch(e => { simListen = null; renderSim(); alert(e.message); });
   $('#simSrc').onchange = async () => {
     const v = $('#simSrc').value; simLearn = null;
     if (v === '__last' && lastRun) simLearn = { frames: lastRun.frames, src: lastRun.stepId };
@@ -1377,13 +1431,7 @@ function renderSim() {
     if (simLearn) { const a = analyse(simLearn.frames, [], []); simLearn.ids = a.ids.filter(x => !(x.id & 0x20000000)); }
     renderSim(); if (v) $('#simSrc').value = v;
   };
-  const lg = $('#simLearnGo'); if (lg) lg.onclick = () => {
-    const fid = +$('#simId').value >>> 0, lf = learnFrame(simLearn.frames, fid, simLearn.src); if (!lf) return;
-    const i = P.frames.findIndex(f => fullId(f) === fid);
-    if (i >= 0) { if (!confirm('Replace the existing 0x' + idStr(fid) + ' frame?')) return; P.frames[i] = lf; } else P.frames.push(lf);
-    simSave(); simLearn = null; renderSim();
-    alert('Learned 0x' + idStr(fid) + ': every ' + lf.period + ' ms, ' + lf.dlc + ' bytes\nCounter: ' + (lf.counter ? 'byte ' + lf.counter.byte + ' mask ' + hex(lf.counter.mask, 2) : 'none found') + '\nChecksum: ' + (lf.checksum ? ckName(lf.checksum) : 'none found (if a byte looks random, the checksum type is not one the app knows yet)'));
-  };
+  const lg = $('#simLearnGo'); if (lg) lg.onclick = () => simLearnApply(+$('#simId').value >>> 0, false);
   $('#simExp').onclick = () => download('shifter_sim_profile.json', JSON.stringify(P, null, 1), 'application/json');
   $('#simImp').onchange = async e => { const f = e.target.files[0]; if (!f) return; try { const j = JSON.parse(await f.text()); if (!Array.isArray(j.frames)) throw new Error('not a profile'); simProfile = j; simSave(); renderSim(); } catch (x) { alert('Import failed: ' + x.message); } };
   simLive();
