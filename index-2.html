@@ -1,0 +1,1355 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MavR CAN Logger</title>
+<style>
+:root{--bg:#0f1214;--card:#1a1f23;--line:#2b3238;--text:#e8ecef;--mut:#93a0aa;--acc:#f2a33a;--ok:#3ecf7a;--bad:#ff5a52;--rec:#ff3b30;--blue:#4aa3ff}
+*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--text);font:16px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{position:sticky;top:0;z-index:5;background:#0b0e10;border-bottom:1px solid var(--line);padding:8px 12px}
+.brand{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.brand b{font-size:15px;letter-spacing:.5px}.brand small{color:var(--mut)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.chip{font-size:12px;padding:3px 8px;border-radius:12px;background:var(--card);border:1px solid var(--line);color:var(--mut);white-space:nowrap}
+.chip.ok{color:var(--ok);border-color:#23593a}.chip.bad{color:var(--bad);border-color:#6a2a26}.chip.rec{color:#fff;background:var(--rec);border-color:var(--rec)}
+nav{display:flex;border-bottom:1px solid var(--line);background:#0b0e10;position:sticky;top:0}
+nav button{flex:1;background:none;border:0;color:var(--mut);padding:12px 4px;font-size:15px;border-bottom:3px solid transparent}
+nav button.on{color:var(--text);border-bottom-color:var(--acc)}
+main{padding:12px;max-width:760px;margin:0 auto 80px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:12px}
+h2{font-size:18px;margin:4px 0 8px}h3{font-size:15px;margin:14px 0 6px;color:var(--mut);text-transform:uppercase;letter-spacing:.6px}
+.step{display:flex;align-items:center;gap:10px;padding:10px 4px;border-bottom:1px solid var(--line);cursor:pointer}
+.step:last-child{border-bottom:0}.step .id{font-weight:700;width:52px;color:var(--acc)}.step .t{flex:1}.step .t small{display:block;color:var(--mut)}
+.tick{width:24px;height:24px;border-radius:50%;border:2px solid var(--line);flex:none;display:grid;place-items:center;font-size:14px}
+.tick.done{background:var(--ok);border-color:var(--ok);color:#000}
+.btn{display:inline-block;border:0;border-radius:10px;padding:12px 16px;font-size:16px;font-weight:600;background:#2a3238;color:var(--text);margin:4px 4px 4px 0}
+.btn.pri{background:var(--acc);color:#111}.btn.ok{background:var(--ok);color:#06210f}.btn.bad{background:var(--bad);color:#fff}.btn.big{width:100%;padding:18px;font-size:20px}
+.btn:disabled{opacity:.4}
+.mut{color:var(--mut)}.small{font-size:13px}
+.prompt{text-align:center;padding:18px 8px}
+.prompt .now{font-size:30px;font-weight:800;line-height:1.15;margin:8px 0}
+.prompt .now.act{color:var(--acc)}
+.prompt .cd{font-size:64px;font-weight:800;color:var(--blue);font-variant-numeric:tabular-nums}
+.bar{height:8px;background:var(--line);border-radius:4px;overflow:hidden}.bar i{display:block;height:100%;background:var(--acc);width:0}
+.next{font-size:14px;color:var(--mut)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{padding:5px 4px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{color:var(--mut);font-weight:600}
+td.mono,.mono{font-family:ui-monospace,Consolas,monospace}
+.byte{display:inline-block;width:20px;text-align:center;border-radius:3px}
+.byte.ch{background:#5a3a08;color:#ffd08a}
+textarea,input[type=text],select{width:100%;background:#0b0e10;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:10px;font-size:15px}
+textarea{min-height:70px}
+label.row{display:block;margin:8px 0}
+.cand{border-left:3px solid var(--acc);padding:6px 8px;margin:6px 0;background:#14191c;border-radius:6px}
+.warn{border-left:3px solid var(--bad);padding:8px;background:#221416;border-radius:6px;margin:8px 0}
+.toggle{display:flex;gap:6px}.toggle button{flex:1}
+.hide{display:none!important}
+.pad{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.padb{border:2px solid var(--line);background:#20272c;color:var(--text);border-radius:14px;padding:22px 6px;font-size:22px;touch-action:none;user-select:none;-webkit-user-select:none}
+.padb small{display:block;font-size:12px;color:var(--mut);font-weight:400;margin-top:4px}
+.padb.held{background:var(--acc);color:#111;border-color:var(--acc)}.padb.held small{color:#111}
+.padb.unmapped{opacity:.45}.padb:disabled{cursor:not-allowed}
+.btn.sm{padding:4px 8px;font-size:13px}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><b>MavR CAN Logger</b><small id="fw"></small></div>
+  <div class="chips">
+    <span class="chip" id="cLink">offline</span><span class="chip" id="cBaud">—</span><span class="chip" id="cRate">0 fps</span>
+    <span class="chip" id="cIds">0 IDs</span><span class="chip" id="cRec">idle</span><span class="chip" id="cErr">err 0</span><span class="chip" id="cSave" style="cursor:pointer" onclick="saveChipClick()">save</span>
+  </div>
+</header>
+<nav><button data-tab="plan" class="on">Plan</button><button data-tab="live">Live</button><button data-tab="runs">Runs</button><button data-tab="sim">Sim</button><button data-tab="setup">Setup</button></nav>
+<main>
+  <section id="tab-plan"></section>
+  <section id="tab-step" class="hide"></section>
+  <section id="tab-live" class="hide"></section>
+  <section id="tab-runs" class="hide"></section>
+  <section id="tab-sim" class="hide"></section>
+  <section id="tab-setup" class="hide"></section>
+</main>
+<script>/*PLAN*/</script>
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+const API = '';               // same origin (http://192.168.4.1)
+const store = {
+  get(k, d) { try { const v = localStorage.getItem('mavr.' + k); return v ? JSON.parse(v) : d; } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem('mavr.' + k, JSON.stringify(v)); } catch (e) {} }
+};
+let progress = store.get('progress', {});   // stepId -> {done, notes, files, frames, summary, at, checks}
+let session = store.get('session', { kbps: 0, date: '', tap: '', batt: '' });
+let status = null, curTab = 'plan', curStep = null, runner = null;
+
+function saveProgress() { store.set('progress', progress); FS.queue(); }
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+function hex(n, w) { return n.toString(16).toUpperCase().padStart(w, '0'); }
+function idStr(id) { const ext = id & 0x80000000; const v = id & 0x1FFFFFFF; return (ext ? hex(v, 8) : hex(v, 3)) + (id & 0x20000000 ? ' (our TX)' : ''); }
+function today() { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+function allSteps() { const a = []; PLAN.forEach(s => s.steps.forEach(x => a.push(x))); return a; }
+function findStep(id) { return allSteps().find(s => s.id === id); }
+
+// ---------------- USB mode: a CANable-style slcan adapter on this PC, via Web Serial (Chrome / Edge).
+// Opened from a file (file://) or with ?usb in the address, the app talks to the adapter directly and
+// LL below stands in for the ESP32's HTTP API, returning the same shapes so the rest of the app is unchanged.
+// ESP32 mode only when served by the logger itself (or the test mock); anywhere else (a file, a web host on a
+// phone or PC) the page talks to a USB adapter. ?esp / ?usb force either.
+const USB = /[?&]usb\b/.test(location.search) || (!/[?&]esp\b/.test(location.search) && location.hostname !== '192.168.4.1' && location.port !== '8765');
+// ---------------- direct USB (WebUSB) driver for CDC-ACM serial adapters, for Android Chrome
+// Same shape as a Web Serial port (open / readable / writable / getInfo / close), so LL uses it unchanged.
+// The CANable/RH02 is a standard USB CDC serial device: claim its data interface and move bytes over the bulk endpoints.
+class UsbCdcPort {
+  constructor(dev) { this.dev = dev; this.readable = null; this.writable = null; this.alive = false; }
+  getInfo() { return { usbVendorId: this.dev.vendorId, usbProductId: this.dev.productId }; }
+  async open() {
+    const d = this.dev;
+    await d.open();
+    if (!d.configuration) await d.selectConfiguration(1);
+    let data = null, comm = null;
+    for (const itf of d.configuration.interfaces) {
+      const a = itf.alternates[0];
+      const bulkIn = a.endpoints.some(e => e.type === 'bulk' && e.direction === 'in'), bulkOut = a.endpoints.some(e => e.type === 'bulk' && e.direction === 'out');
+      if (a.interfaceClass === 0x02) comm = itf;
+      if (bulkIn && bulkOut && (!data || a.interfaceClass === 0x0A)) data = itf;
+    }
+    if (!data) throw new Error('This USB device has no serial data interface. Is it the CAN adapter?');
+    const alt = data.alternates[0], epIn = alt.endpoints.find(e => e.type === 'bulk' && e.direction === 'in'), epOut = alt.endpoints.find(e => e.type === 'bulk' && e.direction === 'out');
+    if (comm) try { await d.claimInterface(comm.interfaceNumber); } catch (e) {}
+    await d.claimInterface(data.interfaceNumber);
+    const ci = comm ? comm.interfaceNumber : data.interfaceNumber;
+    // SET_LINE_CODING 115200 8N1 and SET_CONTROL_LINE_STATE DTR+RTS, as a PC serial driver would send. Ignored if unsupported.
+    try { await d.controlTransferOut({ requestType: 'class', recipient: 'interface', request: 0x20, value: 0, index: ci }, new Uint8Array([0x00, 0xC2, 0x01, 0x00, 0, 0, 8])); } catch (e) {}
+    try { await d.controlTransferOut({ requestType: 'class', recipient: 'interface', request: 0x22, value: 0x03, index: ci }); } catch (e) {}
+    this.alive = true;
+    const size = Math.max(64, epIn.packetSize || 64) * 8;
+    this.readable = new ReadableStream({
+      start: c => { (async () => {
+        while (this.alive) {
+          let r;
+          try { r = await d.transferIn(epIn.endpointNumber, size); } catch (e) { break; }
+          if (r.status === 'stall') { try { await d.clearHalt('in', epIn.endpointNumber); } catch (e) { break; } continue; }
+          if (r.data && r.data.byteLength) c.enqueue(new Uint8Array(r.data.buffer.slice(r.data.byteOffset, r.data.byteOffset + r.data.byteLength)));
+        }
+        this.alive = false; this.readable = null; try { c.close(); } catch (e) {}
+      })(); },
+      cancel: () => { this.alive = false; }
+    });
+    this.writable = new WritableStream({ write: async chunk => { const r = await d.transferOut(epOut.endpointNumber, chunk); if (r.status !== 'ok') throw new Error('USB write ' + r.status); } });
+  }
+  async close() { this.alive = false; this.readable = null; try { await this.dev.close(); } catch (e) {} }
+}
+// Which link to use: Web Serial on a PC; direct USB on Android, where Chrome's serial picker doesn't list USB adapters.
+const IS_ANDROID = /Android/i.test(navigator.userAgent);
+let LINK = store.get('link', IS_ANDROID && 'usb' in navigator ? 'usb' : 'serial');
+function linkOk() { return LINK === 'usb' ? 'usb' in navigator : 'serial' in navigator; }
+function setLink(v) { LINK = v; store.set('link', v); }
+const SLCAN_RATE = { 125: '4', 250: '5', 500: '6', 750: '7', 1000: '8' };
+const FD_LEN = [0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 20, 24, 32, 48, 64];
+const LL = {
+  port: null, reader: null, writer: null, on: false, busy: false, kbps: store.get('usbKbps', 500), ver: '', info: '',
+  total: 0, rxErr: 0, bells: 0, ids: new Map(), lineBuf: '', textLines: [],
+  rec: false, run: '', t0: 0, tStop: 0, chunks: [], cur: null, curN: 0, n: 0, marks: [], overflow: false,
+  CHUNK: 65536, CAP: 5000000,
+  nowUs() { return Math.round((performance.now() - this.t0) * 1000); },
+
+  async connect(port) {
+    if (!port && !linkOk()) throw new Error(LINK === 'usb' ? 'This browser has no direct USB support. Use Chrome.' : 'This browser has no Web Serial. Open the file in Chrome or Edge.');
+    if (this.port) await this.disconnect();
+    if (!port) port = LINK === 'usb' ? new UsbCdcPort(await navigator.usb.requestDevice({ filters: [] })) : await navigator.serial.requestPort();
+    await port.open({ baudRate: 115200, bufferSize: 1 << 20 });
+    this.port = port; this.writer = port.writable.getWriter();
+    const i = port.getInfo ? port.getInfo() : {};
+    this.info = (port instanceof UsbCdcPort ? 'direct USB ' : 'USB ') + (i.usbVendorId ? hex(i.usbVendorId, 4) + ':' + hex(i.usbProductId, 4) : 'serial');
+    this.readLoop(port);
+    await this.send('C'); await sleep(50); this.lineBuf = ''; this.textLines = [];
+    await this.send('V'); await sleep(250);
+    this.ver = (this.textLines.shift() || '').trim();
+    await this.busOn(this.kbps);
+  },
+  async disconnect() {
+    const p = this.port; if (!p) return;
+    try { await this.send('C'); } catch (e) {}
+    this.on = false; this.port = null;
+    try { this.reader && await this.reader.cancel(); } catch (e) {}
+    try { this.writer && this.writer.releaseLock(); } catch (e) {}
+    try { await p.close(); } catch (e) {}
+    this.reader = this.writer = null;
+  },
+  async send(s) { if (!this.writer) throw new Error('No CAN adapter connected'); await this.writer.write(new TextEncoder().encode(s + '\r')); },
+  // Order matters: the firmware ignores S and M while the bus is open, so close, set rate, set the mode, open.
+  // tx=false (always, except while the simulator is armed): M1 bus monitoring. tx=true: M0 normal mode, can ACK and transmit.
+  async busOn(k, tx) {
+    if (!SLCAN_RATE[k]) throw new Error('Unsupported rate ' + k);
+    this.busy = true;
+    try {
+      await this.send('C'); await sleep(60);
+      const b0 = this.bells;
+      await this.send('S' + SLCAN_RATE[k]); await sleep(40);
+      this.silent = true;
+      await this.send(tx ? 'M0' : 'M1'); await sleep(40);   // M1 = bus monitoring (listen-only): no ACKs, no error frames, no TX
+      if (this.bells > b0) throw new Error('Adapter rejected the rate or mode command. Bus left closed.');
+      await this.send('O'); await sleep(40);
+      this.kbps = k; this.on = true; this.silent = !tx; store.set('usbKbps', k);
+    } finally { this.busy = false; }
+  },
+  async readLoop(port) {
+    const dec = new TextDecoder();
+    while (port.readable && this.port === port) {
+      this.reader = port.readable.getReader();
+      try {
+        for (;;) { const { value, done } = await this.reader.read(); if (done) break; this.feed(dec.decode(value, { stream: true }), performance.now()); }
+      } catch (e) { /* unplugged or cancelled */ }
+      finally { try { this.reader.releaseLock(); } catch (e) {} }
+      if (this.port !== port) break;
+      if (!port.readable) break;
+    }
+    if (this.port === port) { this.on = false; this.port = null; try { this.writer.releaseLock(); } catch (e) {} this.writer = null; }
+  },
+  feed(txt, now) {
+    let s = this.lineBuf + txt, a = 0;
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      if (c === 13 || c === 10 || c === 7) {
+        if (c === 7) this.bells++;
+        if (i > a) this.line(s.substring(a, i), now);
+        a = i + 1;
+      }
+    }
+    this.lineBuf = s.substring(a);
+    if (this.lineBuf.length > 300) this.lineBuf = '';
+  },
+  line(l, now) {
+    const f = this.parse(l);
+    if (!f) { if (this.textLines.length < 20) this.textLines.push(l); if (this.on && /^[tTrRdDbB]/.test(l)) this.rxErr++; return; }
+    this.total++;
+    let e = this.ids.get(f.id);
+    if (!e) this.ids.set(f.id, e = { n: 0, last: now, per: 0, dlc: 0, d: new Uint8Array(8), shown: new Uint8Array(8) });
+    else { const dt = now - e.last; if (dt > 0) e.per = e.per ? e.per * 0.9 + dt * 0.1 : dt; }
+    e.n++; e.last = now; e.dlc = f.dlc; e.d.set(f.d);
+    if (this.txWatch && this.txWatch.has(f.id)) SIM.conflict(f.id);   // someone else is sending an ID we are sending
+    this.keep(now, f.id, f.dlc, f.d);
+  },
+  keep(now, id, dlc, d) {
+    if (this.rec) {
+      if (this.n >= this.CAP) { this.overflow = true; return; }
+      if (!this.cur || this.curN === this.CHUNK) { this.cur = new DataView(new ArrayBuffer(20 * this.CHUNK)); this.chunks.push(this.cur); this.curN = 0; }
+      const o = this.curN * 20, dv = this.cur;
+      dv.setUint32(o, Math.max(0, Math.round((now - this.t0) * 1000)), true);
+      dv.setUint32(o + 4, id >>> 0, true); dv.setUint8(o + 8, dlc);
+      for (let j = 0; j < 8; j++) dv.setUint8(o + 9 + j, d[j] || 0);
+      this.curN++; this.n++;
+    }
+  },
+  // Transmit one classic frame (only possible in normal mode). Recorded with bit 29 set = our own TX.
+  tx(id, ext, dlc, d) {
+    if (!this.writer || !this.on || this.silent) return false;
+    let s = (ext ? 'T' + hex(id & 0x1FFFFFFF, 8) : 't' + hex(id & 0x7FF, 3)) + dlc;
+    for (let j = 0; j < dlc; j++) s += hex(d[j], 2);
+    this.writer.write(new TextEncoder().encode(s + '\r')).catch(() => SIM.stop('Adapter write failed'));
+    this.txCount = (this.txCount || 0) + 1;
+    this.keep(performance.now(), ((ext ? 0x80000000 : 0) | 0x20000000 | (id & 0x1FFFFFFF)) >>> 0, dlc, d);
+    return true;
+  },
+  // slcan receive line: t/T data, r/R remote, d/D FD, b/B FD+BRS. Upper case = 29-bit ID. Returns null if malformed.
+  parse(l) {
+    const k = l[0]; if (!'tTrRdDbB'.includes(k)) return null;
+    const ext = k === k.toUpperCase(), il = ext ? 8 : 3, rtr = k === 'r' || k === 'R', fd = 'dDbB'.includes(k);
+    if (l.length < 1 + il + 1) return null;
+    const id = parseInt(l.substr(1, il), 16), dc = parseInt(l[1 + il], 16);
+    if (isNaN(id) || isNaN(dc)) return null;
+    const len = fd ? FD_LEN[dc] : Math.min(dc, 8);
+    const want = 1 + il + 1 + (rtr ? 0 : len * 2);
+    if (l.length !== want || /[^0-9A-Fa-f]/.test(l.substring(1))) return null;
+    const d = [0, 0, 0, 0, 0, 0, 0, 0];
+    if (!rtr) for (let j = 0; j < Math.min(len, 8); j++) d[j] = parseInt(l.substr(2 + il + j * 2, 2), 16);
+    return { id: ((ext ? 0x80000000 : 0) | (rtr ? 0x40000000 : 0) | (id & 0x1FFFFFFF)) >>> 0, dlc: Math.min(len, 8), d };
+  },
+  runBin(from, to) {
+    from = from || 0; to = to == null ? this.n : Math.min(to, this.n);
+    const out = new Uint8Array(Math.max(0, to - from) * 20);
+    for (let i = from, o = 0; i < to;) {
+      const c = Math.floor(i / this.CHUNK), k = i % this.CHUNK, cnt = Math.min(this.CHUNK - k, to - i);
+      out.set(new Uint8Array(this.chunks[c].buffer, k * 20, cnt * 20), o); o += cnt * 20; i += cnt;
+    }
+    return out.buffer;
+  },
+  async autobaud() {
+    for (const k of [500, 250, 1000, 125]) {
+      await this.busOn(k);
+      const t0 = this.total; await sleep(700);
+      if (this.total - t0 >= 5) return k;
+    }
+    await this.busOn(500); return 0;
+  },
+  async call(path, q) {
+    const now = performance.now();
+    switch (path) {
+      case '/api/status':
+        return { fw: 'USB' + (this.ver ? ' ' + this.ver.split(' ')[0] : ''), usb: true, adapter: !!this.port, tx: this.on && !this.silent, kbps: this.on ? this.kbps : 0, recording: this.rec, run: this.run,
+          frames: this.n, cap: this.CAP, marks: this.marks.length, overflow: this.overflow, runUs: this.t0 ? Math.round(((this.rec ? now : this.tStop) - this.t0) * 1000) : 0,
+          secLeft: 9999, totalRx: this.total, ids: this.ids.size, rxErr: this.rxErr, rxMissed: 0, rxOverrun: 0, busOff: false };
+      case '/api/live':
+        return { t: 0, ids: [...this.ids].map(([id, e]) => {
+          let dh = '', ch = '';
+          for (let j = 0; j < 8; j++) { dh += hex(e.d[j], 2); ch += hex(e.d[j] ^ e.shown[j], 2); }
+          e.shown.set(e.d);
+          return [id, e.n, e.per ? 1000 / e.per : 0, Math.round(now - e.last), e.dlc, dh, ch];
+        }) };
+      case '/api/start':
+        if (!this.port) throw new Error('Connect the CAN adapter first (Setup tab)');
+        this.chunks = []; this.cur = null; this.curN = 0; this.n = 0; this.marks = []; this.overflow = false;
+        this.run = q.run || 'run'; this.t0 = performance.now(); this.rec = true;
+        return { ok: true, run: this.run };
+      case '/api/stop':
+        this.rec = false; this.tStop = performance.now();
+        return { ok: true, frames: this.n, marks: this.marks.length };
+      case '/api/mark': {
+        const t = this.nowUs(); this.marks.push([t, String(q.label || 'mark').slice(0, 59)]);
+        return { ok: true, t, n: this.marks.length };
+      }
+      case '/api/markers': return this.marks.slice();
+      case '/api/run.bin': return this.runBin();
+      case '/api/bitrate': {
+        if (!this.port) throw new Error('Connect the CAN adapter first');
+        const k = +q.kbps;
+        if (!k) { const f = await this.autobaud(); return { ok: true, kbps: this.kbps, found: f }; }
+        await this.busOn(k); return { ok: true, kbps: k, found: k };
+      }
+    }
+    throw new Error(path + ' 404');
+  }
+};
+// Re-open an adapter this page was already given permission for, so a reload doesn't need a click.
+if (USB && LINK === 'serial' && 'serial' in navigator) {
+  navigator.serial.addEventListener('disconnect', e => { if (e.target === LL.port) { LL.on = false; } });
+  navigator.serial.getPorts().then(ps => { if (ps.length === 1) LL.connect(ps[0]).catch(() => {}); });
+}
+if (USB && LINK === 'usb' && 'usb' in navigator) {
+  navigator.usb.addEventListener('disconnect', e => { if (LL.port && LL.port.dev === e.device) { LL.on = false; LL.port.alive = false; } });
+  navigator.usb.getDevices().then(ds => { if (ds.length === 1) LL.connect(new UsbCdcPort(ds[0])).catch(() => {}); });
+}
+async function usbConnect() {
+  if (FS.dir && !FS.ok()) await FS.resume();
+  try { await LL.connect(); return true; }
+  catch (e) {
+    if (e.name !== 'NotFoundError') alert('Could not open the adapter: ' + e.message + (LINK === 'usb'
+      ? '\n\nUnplug and replug the adapter, close any other app using it (e.g. Serial USB Terminal), then try again.'
+      : '\n\nClose any other program using the COM port (SavvyCAN, Cangaroo, a serial monitor) and try again.'));
+    return false;
+  }
+  finally { pollStatus(); }
+}
+// ---------------- auto-save folder (File System Access API: Chrome / Edge on a PC)
+// Layout of the chosen folder:
+//   session.json                 everything: session info, S0 readings, every run's notes, results, attempts
+//   Session_Summary.csv          the same, one row per run, for Excel
+//   <id>_<name>.csv              frames for that test (SavvyCAN CSV). Redo overwrites it.
+//   <id>_<name>_markers.csv      the prompts/actions for that test
+//   _recovery/                   10-second checkpoints of the run in progress; cleared when the run is saved
+const FS = {
+  supported: !!window.showDirectoryPicker, dir: null, state: 'none', err: '', lastSave: null, timer: null, writing: Promise.resolve(),
+  ok() { return !!this.dir && this.state === 'ok'; },
+  idb(op, val) {
+    return new Promise(res => {
+      try {
+        const r = indexedDB.open('mavr', 1);
+        r.onupgradeneeded = () => r.result.createObjectStore('kv');
+        r.onsuccess = () => {
+          const st = r.result.transaction('kv', op ? 'readwrite' : 'readonly').objectStore('kv');
+          const q = op === 'put' ? st.put(val, 'dir') : op === 'del' ? st.delete('dir') : st.get('dir');
+          q.onsuccess = () => res(q.result); q.onerror = () => res(null);
+        };
+        r.onerror = () => res(null);
+      } catch (e) { res(null); }
+    });
+  },
+  async perm(ask) {
+    const h = this.dir; if (!h) return false;
+    try {
+      const o = { mode: 'readwrite' };
+      let p = h.queryPermission ? await h.queryPermission(o) : 'granted';
+      if (p !== 'granted' && ask && h.requestPermission) p = await h.requestPermission(o);
+      this.state = p === 'granted' ? 'ok' : 'perm';
+    } catch (e) { this.state = 'error'; this.err = e.message; }
+    return this.ok();
+  },
+  // Page load: reopen the folder used last time. Chrome may need one click to re-allow it.
+  async restore() {
+    if (!this.supported) return;
+    const h = await this.idb(); if (!h) return;
+    this.dir = h;
+    if (await this.perm(false)) await this.attach();
+    refreshSaveUi();
+  },
+  async resume() { if (await this.perm(true)) await this.attach(); refreshSaveUi(); },
+  async choose() {
+    try { this.dir = await window.showDirectoryPicker({ id: 'mavr-captures', mode: 'readwrite' }); } catch (e) { return false; }
+    this.state = 'ok'; await this.idb('put', this.dir); await this.attach(); refreshSaveUi(); return true;
+  },
+  async forget() { this.dir = null; this.state = 'none'; await this.idb('del'); refreshSaveUi(); },
+  // Merge the folder's session.json with this browser's progress (newest result per test wins), then save.
+  async attach() {
+    const txt = await this.read('session.json');
+    if (txt) {
+      try {
+        const j = JSON.parse(txt), runs = j.runs || {};
+        for (const id in runs) { const a = runs[id], b = progress[id]; if (!b || (a.at || '') >= (b.at || '')) progress[id] = a; }
+        const rem = Object.assign({}, j.removed || {}, removedIds);
+        for (const id in rem) if (progress[id] && (progress[id].at || '') <= rem[id]) delete progress[id];
+        removedIds = rem; store.set('removed', removedIds);
+        session = Object.assign({}, session, j.session || {});
+        store.set('progress', progress); store.set('session', session);
+      } catch (e) { this.err = 'session.json unreadable: ' + e.message; }
+    }
+    await this.saveSession();
+    await simLoadFromFolder();
+    await checkRecovery();
+    if (curTab === 'plan') renderPlan();
+  },
+  async handle(name, sub, create) { let d = this.dir; if (sub) d = await d.getDirectoryHandle(sub, { create }); return d.getFileHandle(name, { create }); },
+  async write(name, data, sub) {
+    const job = this.writing.then(async () => {
+      const fh = await this.handle(name, sub, true), w = await fh.createWritable();
+      await w.write(data); await w.close(); this.lastSave = new Date();
+    });
+    this.writing = job.catch(() => {});
+    try { await job; return true; } catch (e) { this.err = e.message; if (e.name === 'NotAllowedError') this.state = 'perm'; refreshSaveUi(); return false; }
+  },
+  async read(name, sub) { try { return await (await (await this.handle(name, sub, false)).getFile()).text(); } catch (e) { return null; } },
+  async remove(name, sub) { try { let d = this.dir; if (sub) d = await d.getDirectoryHandle(sub); await d.removeEntry(name); return true; } catch (e) { return false; } },
+  async list(sub) { const out = []; try { let d = this.dir; if (sub) d = await d.getDirectoryHandle(sub); for await (const [n, h] of d.entries()) if (h.kind === 'file') out.push(n); } catch (e) {} return out.sort(); },
+  queue() { if (!this.ok()) return; clearTimeout(this.timer); this.timer = setTimeout(() => this.saveSession(), 700); },
+  async saveSession() {
+    if (!this.ok()) return false;
+    const j = { tool: 'MavR CAN Capture', format: 1, updated: new Date().toISOString(), mode: USB ? 'usb' : 'esp32',
+      adapter: USB ? (LL.ver + ' ' + LL.info).trim() : undefined, kbps: status && status.kbps, session, removed: removedIds, runs: progress };
+    const ok = await this.write('session.json', JSON.stringify(j, null, 1));
+    if (ok) await this.write('Session_Summary.csv', summaryCsv());
+    refreshSaveUi(); return ok;
+  }
+};
+let removedIds = store.get('removed', {});   // test id -> time it was removed, so a merge can't bring it back
+
+function summaryCsv() {
+  const q = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+  const L = ['run,title,done,attempts,recorded,frames,seconds,markers,ids,top_bits,went_silent,files,notes'];
+  allSteps().forEach(s => {
+    const p = progress[s.id]; if (!p) return;
+    if (s.kind === 'check') {
+      const c = p.checks || {};
+      s.checks.forEach(([k, label]) => L.push([q(s.id + '.' + k), q(label), p.done ? 'yes' : '', '', q(p.at || ''), '', '', '', '', '', '', '', q(c[k] || '')].join(',')));
+      return;
+    }
+    if (!p.at) return;
+    const sm = p.summary || {};
+    L.push([q(s.id), q(s.title), p.done ? 'yes' : '', p.attempts || 1, q(p.at), p.frames || 0, (p.dur || 0).toFixed(1), p.marks || 0, sm.ids || 0,
+      q((sm.top || []).map(c => c.id + ' b' + c.byte + '.' + c.bit + ' ' + c.hit + '/' + c.acts).join('; ')),
+      q((sm.vanish || []).map(v => v.id + ' ' + v.from.toFixed(1) + '-' + (v.to == null ? 'end' : v.to.toFixed(1)) + 's').join('; ')),
+      q((p.files || []).join(' ')), q(p.notes || '')].join(','));
+  });
+  return L.join('\r\n') + '\r\n';
+}
+
+// Header chip + Plan banner showing whether auto-save is on.
+function refreshSaveUi() {
+  const c = $('#cSave'); if (!c) return;
+  if (!FS.supported) { c.textContent = USB ? 'save: Downloads' : 'save: manual'; c.className = 'chip'; }
+  else if (FS.ok()) { c.textContent = '💾 ' + FS.dir.name + (FS.lastSave ? ' ' + FS.lastSave.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : ''); c.className = 'chip ok'; }
+  else if (FS.dir) { c.textContent = 'auto-save paused: click'; c.className = 'chip bad'; }
+  else { c.textContent = 'auto-save OFF: click'; c.className = 'chip bad'; }
+  const b = $('#saveBanner'); if (b) b.outerHTML = saveBanner();
+  const sb = $('#saveBtn'); if (sb) sb.onclick = saveBannerClick;
+}
+function saveBanner() {
+  if (!FS.supported || FS.ok()) return '<div id="saveBanner"></div>';
+  return `<div id="saveBanner" class="card"><h2>Auto-save</h2><p class="small mut">${FS.dir ? 'Chrome needs one click to keep saving to <b>' + esc(FS.dir.name) + '</b>.' : 'Pick the folder for this capture session (e.g. CAN Captures). Every run, note and reading is then saved there automatically.'}</p>
+    <button class="btn pri" id="saveBtn">${FS.dir ? 'Resume saving to ' + esc(FS.dir.name) : 'Choose save folder'}</button></div>`;
+}
+async function saveBannerClick() { if (FS.dir) await FS.resume(); else await FS.choose(); }
+async function saveChipClick() { if (!FS.supported) return; if (FS.dir && !FS.ok()) await FS.resume(); else showTab('setup'); }
+
+// Checkpoints while recording (PC USB mode): every 10 s the new frames go to _recovery/<id>.partNN.csv.
+let ckpt = null;
+function startCheckpoints(s) {
+  if (!USB || !FS.ok()) return;
+  ckpt = { id: s.id, from: 0, part: 0, timer: setInterval(checkpoint, 10000) };
+}
+async function checkpoint() {
+  const c = ckpt; if (!c || !FS.ok()) return;
+  const to = LL.n; if (to <= c.from && c.part) return;
+  const frames = parseBin(LL.runBin(c.from, to));
+  c.part++;
+  let txt = csvSavvy(frames); if (c.part > 1) txt = txt.substring(txt.indexOf('\n') + 1);
+  await FS.write(c.id + '.part' + String(c.part).padStart(3, '0') + '.csv', txt, '_recovery');
+  await FS.write(c.id + '_markers.csv', csvMarks(LL.marks), '_recovery');
+  c.from = to;
+}
+async function stopCheckpoints(clear) {
+  if (!ckpt) return; clearInterval(ckpt.timer);
+  const id = ckpt.id; ckpt = null;
+  if (clear) for (const n of await FS.list('_recovery')) if (n.startsWith(id + '.part') || n === id + '_markers.csv') await FS.remove(n, '_recovery');
+}
+// A run interrupted by a crash, closed tab or unplugged laptop leaves checkpoints behind.
+let recovered = [];
+async function checkRecovery() {
+  const names = await FS.list('_recovery');
+  recovered = [...new Set(names.filter(n => /\.part\d+\.csv$/.test(n)).map(n => n.replace(/\.part\d+\.csv$/, '')))];
+  if (curTab === 'plan') renderPlan();
+}
+async function rebuildRecovered(id) {
+  const s = findStep(id); if (!s) return;
+  const names = (await FS.list('_recovery')).filter(n => n.startsWith(id + '.part')).sort();
+  let txt = ''; for (const n of names) txt += await FS.read(n, '_recovery');
+  const mk = await FS.read(id + '_markers.csv', '_recovery') || 't_us,t_s,label\n';
+  const files = [baseName(s) + '_recovered.csv', baseName(s) + '_recovered_markers.csv'];
+  if (!(await FS.write(files[0], txt)) || !(await FS.write(files[1], mk))) { alert('Could not write the recovered files.'); return; }
+  const frames = parseSavvy(txt), marks = parseMarks(mk), res = analyse(frames, marks, actLabels(s));
+  if (!progress[id] || !progress[id].at || confirm(id + ' already has a saved run. Make the recovered (interrupted) run the current result for ' + id + '? Cancel keeps the saved one; the recovered files stay in the folder either way.'))
+    setP(id, Object.assign(runSummary(s, frames, marks, res, []), { files, saved: true, recovered: true, attempts: ((progress[id] || {}).attempts || 0) + 1 }));
+  for (const n of names) await FS.remove(n, '_recovery');
+  await FS.remove(id + '_markers.csv', '_recovery');
+  await checkRecovery();
+}
+function parseSavvy(txt) {
+  const out = [];
+  for (const l of txt.split(/\r?\n/)) {
+    if (!l || l[0] === 'T') continue;            // header
+    const c = l.split(','); if (c.length < 6) continue;
+    const id = (parseInt(c[1], 16) | (c[2] === 'true' ? 0x80000000 : 0) | (c[3] === 'Tx' ? 0x20000000 : 0)) >>> 0, dlc = +c[5], d = [0, 0, 0, 0, 0, 0, 0, 0];
+    for (let i = 0; i < Math.min(dlc, 8); i++) d[i] = parseInt(c[6 + i], 16) || 0;
+    out.push({ t: +c[0], id, dlc, d });
+  }
+  return out;
+}
+function parseMarks(txt) {
+  return txt.split(/\r?\n/).slice(1).filter(Boolean).map(l => { const m = l.match(/^(\d+),[^,]*,"(.*)"$/); return m ? [+m[1], m[2]] : null; }).filter(Boolean);
+}
+
+async function api(path, method, params) {
+  if (USB) return LL.call(path, params || {});
+  let url = API + path;
+  if (params) url += '?' + new URLSearchParams(params).toString();
+  const r = await fetch(url, { method: method || 'GET', cache: 'no-store' });
+  if (!r.ok) throw new Error(path + ' ' + r.status);
+  const ct = r.headers.get('content-type') || '';
+  return ct.includes('json') ? r.json() : r.arrayBuffer();
+}
+
+// ---------------- status polling
+let lastTotal = 0, lastT = 0, lastFps = 0;
+async function pollStatus() {
+  try {
+    const s = await api('/api/status');
+    const now = performance.now();
+    const fps = lastT ? Math.max(0, (s.totalRx - lastTotal) / ((now - lastT) / 1000)) : 0;
+    lastTotal = s.totalRx; lastT = now; status = s; lastFps = fps;
+    $('#fw').textContent = 'fw ' + s.fw;
+    if (s.usb) setChip('#cLink', s.adapter ? 'adapter ✓' : 'no adapter', s.adapter ? 'ok' : 'bad');
+    else setChip('#cLink', 'connected', 'ok');
+    setChip('#cBaud', s.kbps ? s.kbps + ' kbps' + (s.tx ? ' · TX ON' : '') : 'no bit rate', s.tx ? 'rec' : s.kbps ? 'ok' : 'bad');
+    setChip('#cRate', Math.round(fps) + ' fps', fps > 0 ? 'ok' : 'bad');
+    setChip('#cIds', s.ids + ' IDs', '');
+    setChip('#cRec', s.recording ? '● REC ' + s.run + ' ' + (s.runUs / 1e6).toFixed(0) + 's' : 'idle', s.recording ? 'rec' : '');
+    const errs = s.rxErr + s.rxMissed + s.rxOverrun;
+    setChip('#cErr', 'err ' + s.rxErr + ' / miss ' + (s.rxMissed + s.rxOverrun) + (s.overflow ? ' / FULL' : ''), errs || s.overflow ? 'bad' : '');
+  } catch (e) { setChip('#cLink', 'offline', 'bad'); }
+}
+function setChip(sel, txt, cls) { const e = $(sel); e.textContent = txt; e.className = 'chip ' + (cls || ''); }
+setInterval(pollStatus, 1000); pollStatus();
+
+// ---------------- tabs
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => showTab(b.dataset.tab));
+function showTab(t) {
+  if (runner) return;                // stay on the run screen while recording
+  curTab = t;
+  document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
+  if (t !== 'sim' && SIM.armed) SIM.stop('Left the Sim tab');
+  ['plan', 'step', 'live', 'runs', 'sim', 'setup'].forEach(x => $('#tab-' + x).classList.toggle('hide', x !== t));
+  if (t === 'plan') renderPlan(); if (t === 'runs') renderRuns(); if (t === 'setup') renderSetup(); if (t === 'live') renderLive(); if (t === 'sim') renderSim();
+}
+
+// ---------------- plan list
+function renderPlan() {
+  const steps = allSteps(), done = steps.filter(s => progress[s.id] && progress[s.id].done).length;
+  let h = `<div class="card"><h2>Capture plan</h2><div class="bar"><i style="width:${(100 * done / steps.length).toFixed(0)}%"></i></div>
+    <p class="mut small">${done} of ${steps.length} done. Tap a step to run it. Progress is saved in this browser.</p></div>`;
+  h = saveBanner() + h;
+  if (recovered.length) h = `<div class="card"><h2>Interrupted run found</h2><p class="small">The page closed while recording. Checkpoints were kept for: ${recovered.map(esc).join(', ')}.</p>
+    ${recovered.map(id => `<button class="btn pri" data-rec="${esc(id)}">Rebuild ${esc(id)} files</button>`).join('')}</div>` + h;
+  if (USB && !LL.port) h = `<div class="card"><h2>Connect the CAN adapter</h2><p class="small mut">${linkOk() ? 'Plug in the USB-CAN adapter (termination jumper OFF), then ' + (LINK === 'usb' ? 'pick it in the USB device list.' : 'pick its COM port.') : 'This browser cannot reach USB devices. Use Chrome' + (IS_ANDROID ? ' on Android.' : ' or Edge.')}</p>
+    <button class="btn pri big" id="usbGo" ${linkOk() ? '' : 'disabled'}>Connect adapter</button>
+    <p class="small mut">Connection: ${LINK === 'usb' ? 'direct USB' : 'serial port'} · <a href="#" id="linkSw" style="color:var(--blue)">${LINK === 'usb' ? 'use serial port instead' : 'adapter not listed? use direct USB'}</a></p></div>` + h;
+  PLAN.forEach(st => {
+    h += `<h3>${esc(st.title)}</h3><div class="card">`;
+    st.steps.forEach(s => {
+      const p = progress[s.id] || {};
+      h += `<div class="step" data-id="${s.id}"><div class="tick ${p.done ? 'done' : ''}">${p.done ? '✓' : ''}</div>
+        <div class="id">${s.id}</div><div class="t">${esc(s.title)}<small>${esc(s.why || s.cond || '')}${p.frames ? ' · ' + p.frames + ' frames' : ''}</small></div></div>`;
+    });
+    h += '</div>';
+  });
+  $('#tab-plan').innerHTML = h;
+  document.querySelectorAll('#tab-plan .step').forEach(e => e.onclick = () => openStep(e.dataset.id));
+  const ug = $('#usbGo'); if (ug) ug.onclick = async () => { if (await usbConnect()) renderPlan(); };
+  const ls = $('#linkSw'); if (ls) ls.onclick = e => { e.preventDefault(); setLink(LINK === 'usb' ? 'serial' : 'usb'); renderPlan(); };
+  const sb = $('#saveBtn'); if (sb) sb.onclick = saveBannerClick;
+  document.querySelectorAll('[data-rec]').forEach(b => b.onclick = () => rebuildRecovered(b.dataset.rec));
+}
+
+// ---------------- step screen
+function openStep(id) {
+  curStep = findStep(id);
+  curTab = 'step';
+  if (SIM.armed) SIM.stop('Opened a test step');
+  ['plan', 'live', 'runs', 'sim', 'setup'].forEach(x => $('#tab-' + x).classList.add('hide'));
+  $('#tab-step').classList.remove('hide');
+  renderStep();
+}
+function renderStep() {
+  const s = curStep, p = progress[s.id] || {};
+  if (s.kind === 'check') return renderChecks(s, p);
+  const mode = p.mode || s.mode;
+  const total = s.phases.reduce((a, x) => a + (x.dur || 0), 0);
+  let h = `<div class="card"><div class="mut small">${s.id} · ${mode === 'timed' ? 'timed, about ' + total + ' s' : 'manual: tap NEXT at each step'}</div>
+    <h2>${esc(s.title)}</h2>
+    <p><b>Set up:</b> ${esc(s.cond)}</p>${s.why ? `<p class="mut">Finds: ${esc(s.why)}</p>` : ''}
+    <div class="toggle"><button class="btn ${mode === 'timed' ? 'pri' : ''}" id="mTimed">Timed</button><button class="btn ${mode === 'manual' ? 'pri' : ''}" id="mManual">Manual (NEXT)</button></div>
+    <h3>Sequence</h3><ol class="small">${s.phases.map(x => `<li>${x.action ? '<b>' : ''}${esc(x.text)}${x.action ? '</b>' : ''}${x.dur && mode === 'timed' ? ' <span class="mut">(' + x.dur + ' s)</span>' : ''}</li>`).join('')}</ol>
+    ${s.after ? `<div class="warn">${esc(s.after)}</div>` : ''}
+    ${USB && !LL.port ? '<div class="warn">No CAN adapter connected. Go to Setup → Connect adapter.</div>' : status && !status.kbps ? '<div class="warn">No bit rate set. Go to Setup → Find bit rate first.</div>' : ''}
+    ${status && status.cap < 50000 ? `<div class="warn">Test logger (no PSRAM): holds ${status.cap} frames, about ${Math.round(status.cap / Math.max(lastFps, 50))} s at the current bus rate. Long runs will stop recording when it fills.</div>` : ''}
+    <button class="btn pri big" id="go">● Start recording</button>
+    <button class="btn" id="back">← Back to plan</button></div>`;
+  if (p.at) h += resultCard(s, p);
+  $('#tab-step').innerHTML = h;
+  $('#mTimed').onclick = () => { setP(s.id, { mode: 'timed' }); renderStep(); };
+  $('#mManual').onclick = () => { setP(s.id, { mode: 'manual' }); renderStep(); };
+  $('#go').onclick = () => startRun(s, mode);
+  $('#back').onclick = () => { curStep = null; showTab('plan'); };
+  bindResult(s);
+}
+function setP(id, o) { progress[id] = Object.assign(progress[id] || {}, o); saveProgress(); }
+
+function renderChecks(s, p) {
+  const c = p.checks || {};
+  let h = `<div class="card"><div class="mut small">${s.id} · meter readings (no recording)</div><h2>${esc(s.title)}</h2><p>${esc(s.cond)}</p>`;
+  s.checks.forEach(([k, label]) => { h += `<label class="row">${esc(label)}<input type="text" data-k="${k}" value="${esc(c[k] || '')}"></label>`; });
+  h += `<button class="btn ok big" id="save">Save readings${p.done ? ' (saved)' : ''}</button><button class="btn" id="back">← Back</button></div>`;
+  $('#tab-step').innerHTML = h;
+  $('#save').onclick = () => {
+    const v = {}; document.querySelectorAll('#tab-step input[data-k]').forEach(i => v[i.dataset.k] = i.value);
+    setP(s.id, { checks: v, done: Object.values(v).filter(x => x.trim()).length >= 3, at: new Date().toISOString() });
+    renderChecks(s, progress[s.id]);
+  };
+  $('#back').onclick = () => { curStep = null; showTab('plan'); };
+}
+
+// ---------------- run engine
+function beep(f, ms) {
+  try {
+    const ac = beep.ac || (beep.ac = new (window.AudioContext || window.webkitAudioContext)());
+    const o = ac.createOscillator(), g = ac.createGain(); o.frequency.value = f; o.connect(g); g.connect(ac.destination);
+    g.gain.value = 0.25; o.start(); o.stop(ac.currentTime + ms / 1000);
+  } catch (e) {}
+}
+function buzz(p) { try { navigator.vibrate && navigator.vibrate(p); } catch (e) {} }
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+async function mark(label) {
+  try { const r = await api('/api/mark', 'POST', { label }); if (runner) runner.marks.push([r.t, label]); return r; }
+  catch (e) { if (runner) runner.missed.push(label); }
+}
+
+async function startRun(s, mode) {
+  if (USB && !LL.port && !(await usbConnect())) return;
+  if (!status || !status.kbps) { if (!confirm('No bit rate set yet. Record anyway at 500 kbps?')) return; }
+  const prev = progress[s.id];
+  if (FS.supported && !FS.ok()) {
+    if (confirm('Auto-save is off, so this run would only be kept in the page.\n\nOK = ' + (FS.dir ? 'resume saving to ' + FS.dir.name : 'choose the save folder') + ' now\nCancel = record without auto-save')) { if (FS.dir) await FS.resume(); else await FS.choose(); }
+  }
+  if (prev && prev.at && !confirm(prev.saved ? 'Redo ' + s.id + '? The new recording replaces the saved ' + s.id + ' data and files (attempt ' + ((prev.attempts || 1) + 1) + ').' : 'The last ' + s.id + ' run was not saved. Overwrite it?')) return;
+  beep(660, 60);   // unlocks audio on iOS
+  try { await api('/api/start', 'POST', { run: s.id }); } catch (e) { alert('Could not start: ' + e.message); return; }
+  runner = { step: s, mode, marks: [], missed: [], abort: false, next: null, i: 0 };
+  renderRunner();
+  startCheckpoints(s);
+  await mark('START ' + s.id);
+  for (let i = 0; i < s.phases.length && !runner.abort; i++) {
+    runner.i = i;
+    const ph = s.phases[i];
+    if (mode === 'timed') {
+      if (ph.action) {                         // 3-2-1 lead-in so the action lands on the marker
+        for (let c = 3; c > 0 && !runner.abort; c--) { showPrompt(ph, 'get ready', c, true); beep(880, 80); await sleep(1000); }
+      }
+      if (runner.abort) break;
+      beep(ph.action ? 1320 : 520, ph.action ? 250 : 80); if (ph.action) buzz(200);
+      await mark(ph.label);
+      const t0 = performance.now(), dur = (ph.dur || 5) * 1000;
+      while (!runner.abort) {
+        const left = dur - (performance.now() - t0);
+        if (left <= 0) break;
+        showPrompt(ph, null, Math.ceil(left / 1000), false, 1 - left / dur);
+        await sleep(100);
+      }
+    } else {
+      showPrompt(ph, 'tap NEXT when done', null, false);
+      if (i === 0) await mark(ph.label);
+      await new Promise(res => runner.next = res);
+      if (runner.abort) break;
+      beep(1320, 120); buzz(100);
+      if (i + 1 < s.phases.length) await mark(s.phases[i + 1].label);
+    }
+  }
+  await mark(runner.abort ? 'ABORTED' : 'END');
+  await sleep(300);
+  try { await api('/api/stop', 'POST'); } catch (e) {}
+  beep(440, 300);
+  const r = runner; runner = null;
+  await finishRun(r);
+}
+
+function renderRunner() {
+  const s = runner.step;
+  $('#tab-step').innerHTML = `<div class="card prompt"><div class="mut">${s.id} · ${esc(s.title)} · <span id="rStat"></span></div>
+    <div id="rSub" class="mut"></div><div id="rNow" class="now"></div><div id="rCd" class="cd"></div>
+    <div class="bar"><i id="rBar"></i></div><p id="rNext" class="next"></p>
+    <button class="btn pri big ${runner.mode === 'manual' ? '' : 'hide'}" id="rNextBtn">NEXT ▶</button>
+    <button class="btn" id="rMark">Mark now</button><button class="btn" id="rOdd">Something odd</button><button class="btn bad" id="rAbort">Abort</button></div>`;
+  $('#rNextBtn').onclick = () => runner && runner.next && runner.next();
+  $('#rMark').onclick = () => mark('manual mark');
+  $('#rOdd').onclick = () => { const n = prompt('What happened? (short)'); mark('ODD: ' + (n || '')); };
+  $('#rAbort').onclick = () => { if (confirm('Abort this run?')) { runner.abort = true; runner.next && runner.next(); } };
+}
+function showPrompt(ph, sub, cd, ready, frac) {
+  if (!runner) return;
+  const s = runner.step, nx = s.phases[runner.i + 1];
+  $('#rSub').textContent = sub || (ph.action ? 'DO IT NOW' : '');
+  $('#rNow').textContent = ph.text; $('#rNow').className = 'now' + (ph.action ? ' act' : '');
+  $('#rCd').textContent = cd == null ? '' : cd;
+  $('#rBar').style.width = ((runner.i + (frac || 0)) / s.phases.length * 100).toFixed(1) + '%';
+  $('#rNext').textContent = nx ? 'Next: ' + nx.text : 'Last step';
+  if (status) $('#rStat').textContent = status.frames + ' frames · ' + runner.marks.length + ' marks';
+}
+
+// ---------------- download, parse, analyse
+async function fetchRun() {
+  const [bin, marks] = await Promise.all([api('/api/run.bin'), api('/api/markers')]);
+  return { frames: parseBin(bin), marks };
+}
+function parseBin(buf) {
+  const dv = new DataView(buf), n = Math.floor(buf.byteLength / 20), f = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const o = i * 20, d = new Uint8Array(buf, o + 9, 8);
+    f[i] = { t: dv.getUint32(o, true), id: dv.getUint32(o + 4, true), dlc: dv.getUint8(o + 8), d: Array.from(d) };
+  }
+  return f;
+}
+
+function analyse(frames, marks, actLabels) {
+  const byId = new Map();
+  for (const f of frames) { let a = byId.get(f.id); if (!a) byId.set(f.id, a = []); a.push(f); }
+  const al = new Set(actLabels || []);
+  const acts = marks.filter(m => al.has(m[1]));
+  const win = (t) => acts.some(m => t >= m[0] - 300000 && t <= m[0] + 2500000);
+  const ids = [], cands = [], vanish = [];
+  const end = frames.length ? frames[frames.length - 1].t : 0;
+  for (const [id, a] of byId) {
+    const n = a.length, period = n > 1 ? (a[n - 1].t - a[0].t) / (n - 1) : 0;
+    const info = { id, n, hz: period ? 1e6 / period : 0, counters: [], fast: [] };
+    ids.push(info);
+    // gaps (shifter unplug): any silence longer than 5 periods and 300 ms
+    if (n > 5) for (let i = 1; i < n; i++) { const g = a[i].t - a[i - 1].t; if (g > Math.max(5 * period, 300000)) vanish.push({ id, from: a[i - 1].t, to: a[i].t }); }
+    if (n > 5 && a[n - 1].t < end - Math.max(5 * period, 1000000)) vanish.push({ id, from: a[n - 1].t, to: null });
+    for (let b = 0; b < 8; b++) {
+      // byte-level: counter detection
+      let inc = 0, chg = 0;
+      for (let i = 1; i < n; i++) { const x = a[i].d[b], y = a[i - 1].d[b]; if (x !== y) { chg++; const dd = (x - y) & 0xFF, dn = (x - y) & 0x0F; if (dd === 1 || dd === 0x10 || (dn === 1 && (x >> 4) === (y >> 4))) inc++; } }
+      if (n > 10 && chg > 0.8 * (n - 1)) { (inc > 0.8 * chg ? info.counters : info.fast).push(b); continue; }
+      for (let bit = 0; bit < 8; bit++) {
+        const m = 1 << bit; const flips = [];
+        for (let i = 1; i < n; i++) if ((a[i].d[b] ^ a[i - 1].d[b]) & m) flips.push(a[i].t);
+        if (!flips.length || flips.length > 0.3 * n) continue;
+        const inWin = flips.filter(win).length, out = flips.length - inWin;
+        const hit = acts.filter(mk => flips.some(t => t >= mk[0] - 300000 && t <= mk[0] + 2500000)).length;
+        const score = acts.length ? (hit / acts.length) * (inWin / flips.length) : 0;
+        cands.push({ id, byte: b, bit, flips: flips.length, inWin, out, hit, acts: acts.length, score, first: flips[0] });
+      }
+    }
+  }
+  cands.sort((x, y) => y.score - x.score || x.out - y.out);
+  ids.sort((x, y) => (x.id & 0x1FFFFFFF) - (y.id & 0x1FFFFFFF));
+  return { ids, cands: cands.slice(0, 40), vanish: vanish.slice(0, 30), acts: acts.length, frames: frames.length, dur: end / 1e6 };
+}
+
+function csvSavvy(frames) {
+  const L = ['Time Stamp,ID,Extended,Dir,Bus,LEN,D1,D2,D3,D4,D5,D6,D7,D8'];
+  for (const f of frames) {
+    const ext = !!(f.id & 0x80000000), v = f.id & 0x1FFFFFFF;
+    const d = []; for (let i = 0; i < 8; i++) d.push(i < f.dlc ? hex(f.d[i], 2) : '');
+    L.push(f.t + ',0x' + hex(v, 8) + ',' + ext + ',' + (f.id & 0x20000000 ? 'Tx' : 'Rx') + ',0,' + f.dlc + ',' + d.join(','));
+  }
+  return L.join('\n') + '\n';
+}
+function csvMarks(marks) { return 't_us,t_s,label\n' + marks.map(m => m[0] + ',' + (m[0] / 1e6).toFixed(3) + ',"' + String(m[1]).replace(/"/g, "'") + '"').join('\n') + '\n'; }
+function download(name, text, type) {
+  const blob = new Blob([text], { type: type || 'text/csv' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+}
+// File names carry the test id, not the date, so a redo replaces the old files instead of piling up copies.
+function baseName(s) { return s.id + '_' + s.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''); }
+
+function actLabels(s) { return s.phases.filter(p => p.action).map(p => p.label); }
+let lastRun = null;   // {stepId, frames, marks, res}
+function runSummary(s, frames, marks, res, missed) {
+  const top = topCands(res).map(c => ({ id: idStr(c.id), byte: c.byte, bit: c.bit, hit: c.hit, acts: c.acts, out: c.out }));
+  return { title: s.title, at: new Date().toISOString(), frames: res.frames, dur: res.dur, marks: marks.length,
+    summary: { top, vanish: res.vanish.slice(0, 8).map(v => ({ id: idStr(v.id), from: v.from / 1e6, to: v.to == null ? null : v.to / 1e6 })), ids: res.ids.length, missed } };
+}
+async function saveRunFiles(s, frames, marks) {
+  const files = [baseName(s) + '.csv', baseName(s) + '_markers.csv'];
+  if (FS.ok()) { const ok = await FS.write(files[0], csvSavvy(frames)) && await FS.write(files[1], csvMarks(marks)); return { files, ok, to: ok ? FS.dir.name : '' }; }
+  // Phone (no folder access): save straight to Downloads at the end of every run, no button to forget.
+  if (USB && !FS.supported) { download(files[0], csvSavvy(frames)); await sleep(800); download(files[1], csvMarks(marks)); return { files, ok: true, to: 'Downloads' }; }
+  return { files, ok: false, to: '' };
+}
+async function finishRun(r) {
+  const s = r.step, prev = progress[s.id] || {};
+  $('#tab-step').innerHTML = '<div class="card prompt"><div class="now">' + (USB ? 'Saving run…' : 'Downloading run…') + '</div><p class="mut">' + (USB ? 'Writing the files.' : 'Pulling frames from the logger.') + '</p></div>';
+  let data;
+  try { data = await fetchRun(); } catch (e) { $('#tab-step').innerHTML = `<div class="card"><div class="warn">Download failed: ${esc(e.message)}. The run is still on the logger until the next Start.</div><button class="btn pri" id="retry">Retry download</button></div>`; $('#retry').onclick = () => finishRun(r); return; }
+  const res = analyse(data.frames, data.marks, actLabels(s));
+  lastRun = { stepId: s.id, frames: data.frames, marks: data.marks, res };
+  // An aborted redo must not wipe a good earlier run unless you say so.
+  if (r.abort && prev.at && prev.saved && !confirm('Run aborted. Save it anyway and REPLACE the earlier ' + s.id + ' data?\n\nCancel keeps the earlier data.')) {
+    await stopCheckpoints(true); lastRun = null; renderStep(); return;
+  }
+  const sv = await saveRunFiles(s, data.frames, data.marks);
+  await stopCheckpoints(sv.ok);
+  const hist = (prev.history || []).concat(prev.at ? [{ at: prev.at, frames: prev.frames, aborted: !!prev.aborted }] : []).slice(-10);
+  setP(s.id, Object.assign(runSummary(s, data.frames, data.marks, res, r.missed),
+    { files: sv.files, saved: sv.ok, savedTo: sv.to, aborted: !!r.abort, attempts: (prev.attempts || (prev.at ? 1 : 0)) + 1, history: hist, recovered: false }));
+  renderStep();
+  window.scrollTo(0, document.body.scrollHeight);
+}
+
+function isLastRun(s) { return !!(lastRun && lastRun.stepId === s.id); }
+function resultCard(s, p) {
+  const sm = p.summary || {};
+  let h = `<div class="card"><h2>Last run${p.attempts > 1 ? ' <span class="mut small">(attempt ' + p.attempts + ')</span>' : ''}</h2><p class="small mut">${new Date(p.at).toLocaleString()} · ${p.frames} frames · ${(p.dur || 0).toFixed(1)} s · ${p.marks} markers · ${sm.ids || 0} IDs${p.aborted ? ' · <b>aborted</b>' : ''}${p.recovered ? ' · recovered after interruption' : ''}</p>`;
+  if (sm.missed && sm.missed.length) h += `<div class="warn">${sm.missed.length} marker(s) failed to send (Wi-Fi).</div>`;
+  if (sm.vanish && sm.vanish.length) h += '<h3>IDs that went silent</h3>' + sm.vanish.map(v => `<div class="cand mono">0x${v.id}: ${v.from.toFixed(2)} s → ${v.to == null ? 'end' : v.to.toFixed(2) + ' s'}</div>`).join('');
+  h += '<h3>Bits that flipped with the actions</h3>';
+  const canMap = isLastRun(s);
+  h += sm.top && sm.top.length ? sm.top.map((c, i) => `<div class="cand"><b class="mono">0x${c.id}</b> byte ${c.byte} bit ${c.bit} · at ${c.hit}/${c.acts} actions${c.out ? ', ' + c.out + ' other flips' : ''}${canMap ? ` <select data-tsel="${i}" style="width:auto;padding:3px">${['<option value="">→ Sim button…</option>'].concat(SIM_BTNS.map(([k, l]) => `<option value="${k}" ${STEP_BTN[s.id] === k ? 'selected' : ''}>${esc(l)}</option>`)).join('')}</select><button class="btn sm" data-ta="${i}">Map</button>` : ''}</div>`).join('') : '<p class="mut small">No clear candidates. Normal for baseline, idle and moving runs: the frames are still saved for decoding.</p>';
+  const isLast = isLastRun(s);
+  if (p.saved && p.savedTo) h += `<p class="small" style="color:var(--ok)">✓ Auto-saved to ${esc(p.savedTo)}: ${(p.files || []).map(esc).join(', ')}</p>`;
+  else if (isLast) h += `<button class="btn pri big" id="dl">⬇ Save files${USB ? '' : ' to phone'}</button>${FS.supported ? '<p class="small mut">Choose a save folder (top of the Plan tab) and runs save themselves.</p>' : ''}`;
+  else if (p.saved) h += `<p class="mut small">Files downloaded: ${(p.files || []).map(esc).join(', ')}</p>`;
+  else h += `<p class="mut small" style="color:var(--bad)">Files from this run were NOT saved. ${USB ? 'Redo the run.' : 'The logger keeps the most recent run until the next Start.'}</p>`;
+  if (!isLast && !USB) h += '<button class="btn" id="refetch">Re-download last run from logger</button>';
+  if (!isLast && p.saved && p.savedTo && FS.ok()) h += '<button class="btn" id="reload">Open saved files for full analysis</button>';
+  h += `<label class="row">Notes (what the dash showed, anything odd) <span class="mut small">· saved as you type</span><textarea id="notes">${esc(p.notes || '')}</textarea></label>
+    <button class="btn ok" id="done">${p.done ? '✓ Completed' : 'Mark complete'}</button><button class="btn" id="redo">Redo run</button><button class="btn bad" id="remove">Remove</button>
+    ${isLast ? '<button class="btn" id="more">Full analysis</button>' : ''}<div id="full"></div></div>`;
+  return h;
+}
+let noteTimer = null;
+function bindResult(s) {
+  const p = progress[s.id]; if (!p || !p.at) return;
+  const n = $('#notes'); if (n) n.oninput = () => { clearTimeout(noteTimer); noteTimer = setTimeout(() => setP(s.id, { notes: n.value }), 400); };
+  const dl = $('#dl'); if (dl) dl.onclick = () => {
+    download(p.files[0], csvSavvy(lastRun.frames)); setTimeout(() => download(p.files[1], csvMarks(lastRun.marks)), 800);
+    setP(s.id, { saved: true }); dl.textContent = '✓ Saved (click to save again)';
+  };
+  const rf = $('#refetch'); if (rf) rf.onclick = async () => {
+    try { const d = await fetchRun(); if (!d.marks.length || !String(d.marks[0][1]).includes(s.id)) { alert('The logger holds a different run now.'); return; }
+      lastRun = { stepId: s.id, frames: d.frames, marks: d.marks, res: analyse(d.frames, d.marks, actLabels(s)) }; renderStep(); } catch (e) { alert(e.message); }
+  };
+  const rl = $('#reload'); if (rl) rl.onclick = async () => {
+    const t = await FS.read(p.files[0]), m = await FS.read(p.files[1]);
+    if (!t) { alert('Could not read ' + p.files[0] + ' from ' + FS.dir.name + '.'); return; }
+    const fr = parseSavvy(t), mk = parseMarks(m || '');
+    lastRun = { stepId: s.id, frames: fr, marks: mk, res: analyse(fr, mk, actLabels(s)) }; renderStep();
+  };
+  $('#done').onclick = () => { setP(s.id, { done: !p.done, notes: n ? n.value : p.notes }); renderStep(); };
+  $('#redo').onclick = () => startRun(s, p.mode || s.mode);
+  $('#remove').onclick = () => removeRun(s.id).then(renderStep);
+  const m = $('#more'); if (m) m.onclick = () => { $('#full').innerHTML = fullAnalysis(lastRun.res); };
+  document.querySelectorAll('[data-ta]').forEach(b => b.onclick = () => {
+    const i = +b.dataset.ta, k = $('[data-tsel="' + i + '"]').value, c = topCands(lastRun.res)[i];
+    if (!k || !c) { alert('Pick a Sim button first.'); return; }
+    simAssign(c, k, s.id); b.textContent = '✓ mapped to ' + k;
+  });
+}
+// Remove a test's result: deletes its files from the save folder and its entry in session.json.
+async function removeRun(id) {
+  const s = findStep(id), p = progress[id]; if (!p) return;
+  if (!confirm('Remove ' + id + (s ? ' (' + s.title + ')' : '') + '?\n\nThis deletes its notes and results' + (FS.ok() && p.files ? ' and its files in ' + FS.dir.name : '') + '. It goes back to not done.')) return;
+  if (FS.ok()) for (const f of p.files || []) await FS.remove(f);
+  delete progress[id]; removedIds[id] = new Date().toISOString(); store.set('removed', removedIds);
+  if (lastRun && lastRun.stepId === id) lastRun = null;
+  saveProgress();
+}
+function fullAnalysis(r) {
+  let h = '<h3>All IDs</h3><table><tr><th>ID</th><th>frames</th><th>Hz</th><th>counter bytes</th><th>fast bytes</th></tr>';
+  r.ids.forEach(i => { h += `<tr><td class="mono">0x${idStr(i.id)}</td><td>${i.n}</td><td>${i.hz.toFixed(1)}</td><td>${i.counters.join(' ')}</td><td>${i.fast.join(' ')}</td></tr>`; });
+  h += '</table><h3>Bit candidates</h3><table><tr><th>ID</th><th>byte.bit</th><th>flips</th><th>at actions</th><th>first (s)</th></tr>';
+  r.cands.forEach(c => { h += `<tr><td class="mono">0x${idStr(c.id)}</td><td>${c.byte}.${c.bit}</td><td>${c.flips}</td><td>${c.hit}/${c.acts}</td><td>${(c.first / 1e6).toFixed(2)}</td></tr>`; });
+  return h + '</table>';
+}
+
+// ---------------- live view
+let liveTimer = null, liveRows = new Map(), liveFrozen = false;
+function renderLive() {
+  $('#tab-live').innerHTML = `<div class="card"><h2>Live bus</h2><p class="mut small">Every ID on the bus, updated twice a second. Highlighted bytes changed since the last update.</p>
+    <input type="text" id="flt" placeholder="Filter ID (hex), e.g. 2F"><button class="btn" id="frz">Freeze</button><button class="btn" id="clr">Clear</button>
+    <div id="liveTbl"></div></div>`;
+  $('#frz').onclick = () => { liveFrozen = !liveFrozen; $('#frz').textContent = liveFrozen ? 'Resume' : 'Freeze'; };
+  $('#clr').onclick = () => liveRows.clear();
+  clearInterval(liveTimer); liveTimer = setInterval(pollLive, 500); pollLive();
+}
+async function pollLive() {
+  if (curTab !== 'live') { clearInterval(liveTimer); return; }
+  if (liveFrozen) return;
+  try {
+    const j = await api('/api/live');
+    j.ids.forEach(x => liveRows.set(x[0], x));
+    const f = ($('#flt').value || '').toUpperCase();
+    const rows = [...liveRows.values()].filter(x => !f || idStr(x[0]).includes(f)).sort((a, b) => (a[0] & 0x1FFFFFFF) - (b[0] & 0x1FFFFFFF));
+    let h = '<table><tr><th>ID</th><th>Hz</th><th>data</th><th>age</th></tr>';
+    rows.forEach(x => {
+      let d = '';
+      for (let i = 0; i < 8; i++) { const v = x[5].substr(i * 2, 2), c = x[6].substr(i * 2, 2); d += i < x[4] ? `<span class="byte ${c !== '00' ? 'ch' : ''}">${v}</span>` : '<span class="byte mut">··</span>'; }
+      h += `<tr><td class="mono">${idStr(x[0])}</td><td>${x[2].toFixed(0)}</td><td class="mono">${d}</td><td class="mut">${x[3] > 2000 ? (x[3] / 1000).toFixed(0) + 's' : ''}</td></tr>`;
+    });
+    $('#liveTbl').innerHTML = h + '</table>';
+  } catch (e) {}
+}
+
+// ---------------- runs / report
+function renderRuns() {
+  const steps = allSteps().filter(s => progress[s.id] && progress[s.id].at);
+  let h = `<div class="card"><h2>Session</h2>
+    <label class="row">Date<input type="text" id="sDate" value="${esc(session.date || today())}"></label>
+    <label class="row">Tap point<input type="text" id="sTap" value="${esc(session.tap || '')}" placeholder="shifter connector / diagnostic"></label>
+    <label class="row">Battery voltage<input type="text" id="sBatt" value="${esc(session.batt || '')}"></label>
+    <p class="small ${FS.ok() ? '' : 'mut'}">${FS.ok() ? '✓ Everything on this tab is auto-saved to <b>' + esc(FS.dir.name) + '</b>: session.json (complete) and Session_Summary.csv (Excel).' : 'No save folder: use the button below to download a report.'}</p>
+    <button class="btn ${FS.ok() ? '' : 'pri'}" id="rep">⬇ Download session report</button><button class="btn bad" id="reset">Start a new session</button></div>`;
+  h += '<div class="card"><h2>Runs recorded</h2><table><tr><th>Run</th><th>frames</th><th>tries</th><th>files</th><th>notes</th><th></th></tr>';
+  steps.forEach(s => { const p = progress[s.id]; h += `<tr data-id="${s.id}"><td><b>${s.id}</b> ${p.done ? '✓' : ''}<br><span class="mut small">${esc(s.title)}</span></td><td>${p.frames || (s.kind === 'check' ? 'readings' : '')}</td><td>${p.attempts || 1}</td><td>${s.kind === 'check' ? '' : p.saved ? 'saved' : '<span style="color:var(--bad)">not saved</span>'}</td><td class="small">${esc(p.notes || '')}</td><td><button class="btn bad" style="padding:4px 8px;font-size:13px" data-rm="${s.id}">✕</button></td></tr>`; });
+  $('#tab-runs').innerHTML = h + '</table></div>';
+  ['sDate', 'sTap', 'sBatt'].forEach(k => $('#' + k).oninput = () => { session[{ sDate: 'date', sTap: 'tap', sBatt: 'batt' }[k]] = $('#' + k).value; store.set('session', session); FS.queue(); });
+  document.querySelectorAll('#tab-runs [data-rm]').forEach(b => b.onclick = ev => { ev.stopPropagation(); removeRun(b.dataset.rm).then(renderRuns); });
+  $('#rep').onclick = () => download(today() + '_session_report.json', JSON.stringify({ tool: 'MavR CAN Logger', mode: USB ? 'usb' : 'esp32', adapter: USB ? LL.ver + ' ' + LL.info : undefined, fw: status && status.fw, kbps: status && status.kbps, session, progress }, null, 1), 'application/json');
+  $('#reset').onclick = async () => {
+    if (!confirm('Start a new session? This clears every result and note' + (FS.ok() ? ' in this browser and in ' + FS.dir.name + "'s session.json.\n\nA backup copy of session.json is written first, and the run CSV files are not deleted." : ' in this browser.'))) return;
+    if (FS.ok()) { const t = await FS.read('session.json'); if (t) await FS.write('session_backup_' + new Date().toISOString().replace(/[:.]/g, '-') + '.json', t); }
+    progress = {}; removedIds = {}; store.set('removed', removedIds); saveProgress(); renderRuns();
+  };
+  document.querySelectorAll('#tab-runs tr[data-id]').forEach(r => r.onclick = () => openStep(r.dataset.id));
+}
+
+// ---------------- shifter simulator (PC + USB adapter only)
+// Stands in for the factory shifter: sends its frames at their own period with a rolling counter and checksum,
+// and while a pad button is held, applies that button's bit changes. Everything it knows comes from the captures:
+// "Learn" copies a frame (period, data, counter, checksum) from a run, and "→ Sim" on a result maps a bit to a button.
+// Button map syntax, space separated:  2F0:1.0=1  (ID 0x2F0, byte 1, bit 0 set to 1)   2F0:3&0F=05  (byte 3, mask 0F, value 05)
+const SIM_BTNS = [['P', 'P'], ['R', 'R (lever)'], ['D', 'D (lever)'], ['N', 'N'], ['M', 'M'], ['L', 'L'], ['OVR', 'Override'], ['UP', 'Up paddle'], ['DN', 'Down paddle']];
+const SIM_KEYS = { p: 'P', r: 'R', d: 'D', n: 'N', m: 'M', l: 'L', o: 'OVR', arrowup: 'UP', arrowdown: 'DN' };
+const STEP_BTN = { 'S1-3': 'P', 'S1-4': 'N', 'S1-5': 'M', 'S1-6': 'L', 'S1-7': 'D', 'S1-8': 'R', 'S1-9': 'OVR', 'S1-10': 'UP' };
+// Decoded on 2026-10-13 from Kenny's Maverick R captures: every shifter button is one bit of 0x345 byte 0.
+const MAVR_BUTTONS = { P: '345:0.0=1', N: '345:0.1=1', R: '345:0.2=1', D: '345:0.3=1', L: '345:0.4=1', M: '345:0.5=1' };
+const MAVR_SHIFTER_ID = 0x345, MAVR_WATCH = '309 530 227';
+// The shifter's one message, read from S1-3_p-button.csv (2,860 frames): 0x345 every 20 ms, 8 bytes.
+// byte 0 = buttons, bytes 1-5 = 0, byte 6 = counter 0..15, byte 7 = CRC-8 SAE J1850 (poly 1D, init FF, xor FF) over bytes 0-6.
+const MAVR_FRAME = { on: true, id: 0x345, ext: false, period: 20, dlc: 8, data: [0, 0, 0, 0, 0, 0, 0, 0], counter: { byte: 6, mask: 0x0F },
+  checksum: { alg: 'crc8', poly: 0x1D, init: 0xFF, xorout: 0xFF, withId: false, byte: 7 }, source: 'S1-3 2026-10-13', frames: 2860 };
+let simProfile = store.get('sim', { updated: '', frames: [], buttons: {} });
+if (!Object.keys(simProfile.buttons || {}).length) simProfile.buttons = Object.assign({}, MAVR_BUTTONS);
+if (!simProfile.frames.length) simProfile.frames = [JSON.parse(JSON.stringify(MAVR_FRAME))];
+let simAllowed = false;            // "Allow sending" — per page load, never remembered
+let simSaveTimer = null, simRec = null, simLearn = null, simWatch = store.get('simWatch', MAVR_WATCH);
+
+function simSave() {
+  simProfile.updated = new Date().toISOString(); store.set('sim', simProfile);
+  clearTimeout(simSaveTimer); simSaveTimer = setTimeout(() => { if (FS.ok()) FS.write('shifter_sim_profile.json', JSON.stringify(simProfile, null, 1)); }, 600);
+}
+async function simLoadFromFolder() {
+  const t = await FS.read('shifter_sim_profile.json'); if (!t) { if (simProfile.frames.length) simSave(); return; }
+  try { const j = JSON.parse(t); if ((j.updated || '') > (simProfile.updated || '')) { simProfile = j; store.set('sim', j); } else if ((j.updated || '') < (simProfile.updated || '')) simSave(); } catch (e) {}
+}
+function fullId(f) { return ((f.ext ? 0x80000000 : 0) | (f.id & 0x1FFFFFFF)) >>> 0; }
+function parseEdits(spec) {
+  const out = [];
+  for (const tok of String(spec || '').split(/[\s,;]+/).filter(Boolean)) {
+    let m = tok.match(/^([0-9a-f]{1,8}):(\d)\.(\d)=([01])$/i);
+    if (m) { const ext = m[1].length > 3, bit = +m[3]; out.push({ id: ((ext ? 0x80000000 : 0) | parseInt(m[1], 16)) >>> 0, byte: +m[2], mask: 1 << bit, val: (+m[4]) << bit }); continue; }
+    m = tok.match(/^([0-9a-f]{1,8}):(\d)&([0-9a-f]{1,2})=([0-9a-f]{1,2})$/i);
+    if (m) { const ext = m[1].length > 3; out.push({ id: ((ext ? 0x80000000 : 0) | parseInt(m[1], 16)) >>> 0, byte: +m[2], mask: parseInt(m[3], 16), val: parseInt(m[4], 16) }); continue; }
+    out.push({ bad: tok });
+  }
+  return out;
+}
+
+// ---- checksum + counter
+function crc8(bytes, poly, init) { let c = init; for (const b of bytes) { c ^= b; for (let i = 0; i < 8; i++) c = c & 0x80 ? ((c << 1) ^ poly) & 0xFF : (c << 1) & 0xFF; } return c; }
+function ckCompute(ck, id, d, dlc) {
+  const bytes = [];
+  if (ck.withId) bytes.push(id & 0xFF, (id >> 8) & 0xFF);
+  for (let i = 0; i < dlc; i++) if (i !== ck.byte) bytes.push(d[i]);
+  let v;
+  if (ck.alg === 'sum8') v = bytes.reduce((a, b) => a + b, ck.init || 0) & 0xFF;
+  else if (ck.alg === 'sum8neg') v = (0x100 - (bytes.reduce((a, b) => a + b, ck.init || 0) & 0xFF)) & 0xFF;
+  else if (ck.alg === 'xor8') v = bytes.reduce((a, b) => a ^ b, ck.init || 0);
+  else v = crc8(bytes, ck.poly || 0x1D, ck.init || 0);
+  return (v ^ (ck.xorout || 0)) & 0xFF;
+}
+function ckName(ck) { return ck ? ck.alg + (ck.alg === 'crc8' ? ' poly ' + hex(ck.poly, 2) : '') + (ck.init ? ' init ' + hex(ck.init, 2) : '') + (ck.xorout ? ' xor ' + hex(ck.xorout, 2) : '') + (ck.withId ? ' +ID' : '') + ' @byte ' + ck.byte : 'none'; }
+const CK_VARIANTS = (() => {
+  const v = [];
+  for (const withId of [false, true]) {
+    for (const xorout of [0, 0xFF]) { v.push({ alg: 'sum8', init: 0, xorout, withId }); v.push({ alg: 'xor8', init: 0, xorout, withId }); }
+    v.push({ alg: 'sum8neg', init: 0, xorout: 0, withId });
+    for (const poly of [0x1D, 0x2F, 0x07, 0x31, 0x9B, 0xD5]) for (const init of [0, 0xFF]) for (const xorout of [0, 0xFF]) v.push({ alg: 'crc8', poly, init, xorout, withId });
+  }
+  return v;
+})();
+function maskShift(m) { let s = 0; while (m && !(m & 1)) { m >>= 1; s++; } return s; }
+function detectCounter(fr, dlc) {
+  const n = Math.min(fr.length, 400); if (n < 10) return null;
+  let best = null;   // highest share of +1 steps wins; a nibble counter also looks 94% right as a full byte, so ties go to the first (larger) mask
+  for (let b = 0; b < dlc; b++) for (const mask of [0xFF, 0x0F, 0xF0]) {
+    const sh = maskShift(mask), max = mask >> sh; let ok = 0, chg = 0;
+    for (let i = 1; i < n; i++) { const a = (fr[i - 1].d[b] & mask) >> sh, c = (fr[i].d[b] & mask) >> sh; if (a !== c) chg++; if (((c - a) & max) === 1) ok++; }
+    const r = ok / (n - 1);
+    if (r > 0.9 && chg > n / 2 && (!best || r > best.r + 1e-9)) best = { byte: b, mask, r };
+  }
+  return best ? { byte: best.byte, mask: best.mask } : null;
+}
+function detectChecksum(fr, id, dlc, counter) {
+  const n = Math.min(fr.length, 300); if (n < 10) return null;
+  let best = null;
+  for (let b = 0; b < dlc; b++) {
+    if (counter && counter.byte === b) continue;   // the counter byte is never the checksum
+    let varies = false; for (let i = 1; i < n && !varies; i++) if (fr[i].d[b] !== fr[0].d[b]) varies = true;
+    if (!varies) continue;
+    for (const v of CK_VARIANTS) {
+      const ck = Object.assign({ byte: b }, v); let ok = 0;
+      for (let i = 0; i < n; i++) if (ckCompute(ck, id, fr[i].d, dlc) === fr[i].d[b]) ok++;
+      if (ok / n > 0.97 && (!best || ok > best.ok)) best = { ck, ok };
+    }
+  }
+  return best ? best.ck : null;
+}
+function learnFrame(frames, fid, source) {
+  const fr = frames.filter(f => f.id === fid); if (!fr.length) return null;
+  const ints = []; for (let i = 1; i < fr.length; i++) ints.push(fr[i].t - fr[i - 1].t); ints.sort((a, b) => a - b);
+  const dlcs = {}; fr.forEach(f => dlcs[f.dlc] = (dlcs[f.dlc] || 0) + 1);
+  const dlc = +Object.keys(dlcs).sort((a, b) => dlcs[b] - dlcs[a])[0];
+  const counter = detectCounter(fr, dlc), checksum = detectChecksum(fr, fid & 0x1FFFFFFF, dlc, counter);
+  return { on: true, id: fid & 0x1FFFFFFF, ext: !!(fid & 0x80000000), period: ints.length ? Math.max(5, Math.round(ints[ints.length >> 1] / 1000)) : 100,
+    dlc, data: fr[0].d.slice(0, 8), counter, checksum, source: source || '', frames: fr.length };
+}
+// "→ Sim" on a result: map that bit to a pad button, with the polarity seen in the capture.
+function simAssign(cand, btn, stepId) {
+  if (!lastRun || !btn) return;
+  const fr = lastRun.frames.filter(f => f.id === cand.id); if (!fr.length) return;
+  const base = (fr[0].d[cand.byte] >> cand.bit) & 1;
+  if (!simProfile.frames.some(f => fullId(f) === cand.id)) { const lf = learnFrame(lastRun.frames, cand.id, stepId); if (lf) simProfile.frames.push(lf); }
+  const tok = (cand.id & 0x80000000 ? hex(cand.id & 0x1FFFFFFF, 8) : hex(cand.id & 0x7FF, 3)) + ':' + cand.byte + '.' + cand.bit + '=' + (base ? 0 : 1);
+  const cur = String(simProfile.buttons[btn] || '').split(/\s+/).filter(Boolean).filter(t => !t.startsWith(tok.slice(0, -1)));
+  simProfile.buttons[btn] = cur.concat(tok).join(' ');
+  simSave();
+}
+function topCands(res) { return res.cands.filter(c => c.score > 0.3 && c.out <= Math.max(3, 2 * c.hit) && !(c.id & 0x20000000)).slice(0, 8); }
+
+// ---- the sender
+const SIM = {
+  armed: false, held: new Set(), st: [], timer: null, last: 0, msg: '', busy: false,
+  ready() {
+    const r = [];
+    if (!USB) r.push('Sending needs the USB adapter on a PC. The ESP32 logger is wired so it can never transmit.');
+    else if (!LL.port) r.push('Connect the CAN adapter (Setup).');
+    else if (!LL.on) r.push('The bus is closed: set the bit rate in Setup.');
+    if (!simAllowed) r.push('Sending is not allowed yet (switch above).');
+    if (!simProfile.frames.some(f => f.on)) r.push('No frame to send yet: do step 2 below (learn 0x345 from the bus).');
+    return r;
+  },
+  async arm() {
+    const r = this.ready(); if (r.length) { alert(r.join('\n')); return; }
+    const now = performance.now(), fl = simProfile.frames.filter(f => f.on);
+    if (![...LL.ids.values()].some(e => now - e.last < 1000)) { alert('No CAN traffic in the last second. Key on? Right bit rate?\nSending is only allowed onto a live bus whose bit rate is confirmed.'); return; }
+    const busy = fl.filter(f => { const e = LL.ids.get(fullId(f)); return e && now - e.last < 1500; });
+    if (busy.length) { alert('Not starting: ' + busy.map(f => '0x' + idStr(fullId(f))).join(', ') + ' is still on the bus.\n\nThe factory shifter (or another node) is still sending it. Unplug the factory shifter first: two senders of the same ID corrupt each other.'); return; }
+    if (!confirm('Start sending as the shifter?\n\n• Factory shifter UNPLUGGED (the app also checks the bus)\n• Chocked or on stands, brake held, nobody near the wheels\n• Key on; do the first tests with the engine OFF\n\nThe adapter leaves listen-only while sending. STOP, Esc, leaving this tab or hiding the window stops sending and puts it back in listen-only.')) return;
+    this.busy = true;
+    try { await LL.busOn(LL.kbps, true); } catch (e) { this.busy = false; alert('Could not switch the adapter to normal mode: ' + e.message); try { await LL.busOn(LL.kbps, false); } catch (x) {} return; }
+    this.busy = false;
+    LL.txWatch = new Set(fl.map(fullId));
+    this.st = simProfile.frames.map(() => ({ cnt: 0, next: performance.now(), sent: 0, last: [] }));
+    this.armed = true; this.msg = ''; this.last = performance.now();
+    this.timer = setInterval(() => this.tick(), 2);
+    if (LL.rec) api('/api/mark', 'POST', { label: 'SIM start' });
+    beep(990, 120); renderSim(); pollStatus();
+  },
+  async stop(why) {
+    if (!this.armed) return;
+    clearInterval(this.timer); this.timer = null; this.armed = false; this.held.clear(); LL.txWatch = null;
+    this.msg = why || 'Stopped';
+    if (LL.rec) api('/api/mark', 'POST', { label: 'SIM stop: ' + this.msg });
+    try { if (LL.port) await LL.busOn(LL.kbps, false); } catch (e) { this.msg += ' · could not return to listen-only: ' + e.message; }
+    beep(330, 250); if (curTab === 'sim') renderSim(); pollStatus();
+  },
+  conflict(id) { if (this.armed) this.stop('0x' + idStr(id) + ' appeared from another node while sending. Is the factory shifter plugged in?'); },
+  build(i) {
+    const f = simProfile.frames[i], st = this.st[i], d = f.data.slice(0, 8), fid = fullId(f);
+    for (const b of this.held) for (const e of parseEdits(simProfile.buttons[b])) if (!e.bad && e.id === fid) d[e.byte] = (d[e.byte] & ~e.mask) | (e.val & e.mask);
+    if (f.counter) { const sh = maskShift(f.counter.mask), max = f.counter.mask >> sh; st.cnt = (st.cnt + 1) & max; d[f.counter.byte] = (d[f.counter.byte] & ~f.counter.mask) | ((st.cnt << sh) & f.counter.mask); }
+    if (f.checksum) d[f.checksum.byte] = ckCompute(f.checksum, f.id, d, f.dlc);
+    return d;
+  },
+  tick() {
+    const now = performance.now();
+    if (now - this.last > 500) { this.stop('Timing stalled (' + Math.round(now - this.last) + ' ms). The frames must keep their rate, so sending stopped.'); return; }
+    this.last = now;
+    simProfile.frames.forEach((f, i) => {
+      if (!f.on) return;
+      const st = this.st[i]; if (now < st.next) return;
+      const d = this.build(i);
+      if (!LL.tx(f.id, f.ext, f.dlc, d)) { this.stop('The adapter is not accepting frames'); return; }
+      st.sent++; st.last = d;
+      st.next += f.period; if (st.next < now) st.next = now + f.period;
+    });
+    if (curTab === 'sim' && (!this.ui || now - this.ui > 200)) { this.ui = now; simLive(); }
+  },
+  press(b) {
+    if (!this.armed || this.held.has(b)) return;
+    this.held.add(b); this.st.forEach(s => s.next = performance.now());   // send the change now, not at the next period
+    if (LL.rec) api('/api/mark', 'POST', { label: 'SIM ' + b + ' down' });
+    const e = document.querySelector('[data-sb="' + b + '"]'); if (e) e.classList.add('held');
+  },
+  release(b) {
+    if (!this.held.delete(b)) return;
+    this.st.forEach(s => s.next = performance.now());
+    if (LL.rec) api('/api/mark', 'POST', { label: 'SIM ' + b + ' up' });
+    const e = document.querySelector('[data-sb="' + b + '"]'); if (e) e.classList.remove('held');
+  }
+};
+document.addEventListener('visibilitychange', () => { if (document.hidden) SIM.stop('Window hidden'); });
+window.addEventListener('blur', () => [...SIM.held].forEach(b => SIM.release(b)));
+window.addEventListener('keydown', e => {
+  if (curTab !== 'sim' || /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
+  if (e.key === 'Escape') { SIM.stop('Esc pressed'); return; }
+  const b = SIM_KEYS[e.key.toLowerCase()]; if (b && SIM.armed) { e.preventDefault(); if (!e.repeat) SIM.press(b); }
+});
+window.addEventListener('keyup', e => { const b = SIM_KEYS[e.key.toLowerCase()]; if (b) SIM.release(b); });
+
+// ---- learn the shifter frame from the live bus: 10 s of listening while the factory shifter is still plugged in
+let simListen = null;   // {left} while learning from the bus
+async function simLearnLive() {
+  if (!LL.port || !LL.on) { alert('Connect the adapter and set the bit rate first.'); return; }
+  if (LL.rec || runner) { alert('A recording is running. Finish it first.'); return; }
+  const now = performance.now();
+  if (![...LL.ids.values()].some(e => now - e.last < 1000)) { alert('No CAN traffic. Key on?'); return; }
+  simListen = { left: 10 }; renderSim();
+  await api('/api/start', 'POST', { run: 'LEARN' });
+  for (let i = 10; i > 0; i--) { simListen.left = i; const e = $('#simLiveLeft'); if (e) e.textContent = i; await sleep(1000); }
+  await api('/api/stop', 'POST');
+  const d = await fetchRun(); simListen = null;
+  const a = analyse(d.frames, [], []);
+  simLearn = { frames: d.frames, src: 'live ' + today(), ids: a.ids.filter(x => !(x.id & 0x20000000)) };
+  const want = simLearn.ids.find(x => (x.id & 0x1FFFFFFF) === MAVR_SHIFTER_ID);
+  if (want) { simLearnApply(want.id, true); }
+  else { renderSim(); alert('0x345 was not on the bus during those 10 s. Is the factory shifter plugged in and the key on? Pick the shifter ID from the list by hand if it is different.'); }
+}
+function simLearnApply(fid, quiet) {
+  const lf = learnFrame(simLearn.frames, fid, simLearn.src); if (!lf) return;
+  const i = simProfile.frames.findIndex(f => fullId(f) === fid);
+  if (i >= 0) { if (!quiet && !confirm('Replace the existing 0x' + idStr(fid) + ' frame?')) return; simProfile.frames[i] = lf; } else simProfile.frames.push(lf);
+  simSave(); if (quiet) simLearn = null; renderSim();
+  const msg = 'Learned 0x' + idStr(fid) + ': every ' + lf.period + ' ms, ' + lf.dlc + ' bytes, ' + lf.frames + ' frames seen\nCounter: ' + (lf.counter ? 'byte ' + lf.counter.byte + ' mask ' + hex(lf.counter.mask, 2) : 'none found') + '\nChecksum: ' + (lf.checksum ? ckName(lf.checksum) : 'none found');
+  if (!quiet) alert(msg); else simLastLearn = msg;
+}
+let simLastLearn = '';
+
+// ---- recording a simulator session: frames we send are logged as Tx, so you see cause and effect in one file
+async function simRecToggle() {
+  if (!simRec) {
+    await api('/api/start', 'POST', { run: 'SIM' }); simRec = { t: new Date() };
+    await api('/api/mark', 'POST', { label: 'SIM rec start' + (SIM.armed ? ' (sending)' : '') });
+    renderSim(); return;
+  }
+  await api('/api/mark', 'POST', { label: 'SIM rec end' }); await api('/api/stop', 'POST');
+  const d = await fetchRun(), t = simRec.t; simRec = null;
+  const name = 'SIM_' + today() + '_' + String(t.getHours()).padStart(2, '0') + String(t.getMinutes()).padStart(2, '0') + String(t.getSeconds()).padStart(2, '0');
+  const labels = [...new Set(d.marks.map(m => m[1]).filter(l => / down$/.test(l)))];
+  const res = analyse(d.frames, d.marks, labels);
+  let saved = false;
+  if (FS.ok()) saved = await FS.write(name + '.csv', csvSavvy(d.frames)) && await FS.write(name + '_markers.csv', csvMarks(d.marks));
+  else { download(name + '.csv', csvSavvy(d.frames)); setTimeout(() => download(name + '_markers.csv', csvMarks(d.marks)), 800); saved = true; }
+  simLastRec = { name, saved, frames: d.frames.length, presses: d.marks.filter(m => / down$/.test(m[1])).length, top: topCands(res).map(c => ({ id: idStr(c.id), byte: c.byte, bit: c.bit, hit: c.hit, acts: c.acts, out: c.out })) };
+  renderSim();
+}
+let simLastRec = null;
+
+// ---- UI
+function simLive() {
+  const s3 = $('#simStep3');
+  if (s3 && USB) { const t = performance.now(), seen = [...LL.ids].some(([id, e]) => (id & 0x1FFFFFFF) === MAVR_SHIFTER_ID && t - e.last < 1500);
+    s3.innerHTML = (LL.port && !seen ? '<span style="color:var(--ok)">✓</span>' : '<span style="color:var(--bad)">✗</span>') + ' Unplug the factory shifter. ' + (seen ? '<b>0x345 is still on the bus.</b>' : LL.port ? '0x345 is not on the bus.' : ''); }
+  const sent = $('#simSent'); if (sent) sent.innerHTML = simProfile.frames.map((f, i) => { const st = SIM.st[i] || {}; return `<tr><td class="mono">0x${idStr(fullId(f))}</td><td>${f.on ? f.period + ' ms' : 'off'}</td><td class="mono">${(st.last || []).slice(0, f.dlc).map(b => hex(b, 2)).join(' ')}</td><td>${st.sent || 0}</td></tr>`; }).join('');
+  const w = $('#simWatchTbl'); if (!w) return;
+  const ids = simWatch.split(/[\s,]+/).filter(Boolean).map(x => ((x.length > 3 ? 0x80000000 : 0) | parseInt(x, 16)) >>> 0);
+  const now = performance.now();
+  w.innerHTML = ids.map(id => {
+    const e = USB ? LL.ids.get(id) : null;
+    if (!e) return `<tr><td class="mono">0x${idStr(id)}</td><td class="mut" colspan="2">not seen</td></tr>`;
+    let d = ''; for (let i = 0; i < 8; i++) { const ch = e.d[i] !== e.shown[i]; d += i < e.dlc ? `<span class="byte ${ch ? 'ch' : ''}">${hex(e.d[i], 2)}</span>` : ''; }
+    if (!SIM.wHold || now - SIM.wHold > 1500) { SIM.wHold = now; ids.forEach(x => { const y = LL.ids.get(x); if (y) y.shown.set(y.d); }); }
+    return `<tr><td class="mono">0x${idStr(id)}</td><td class="mono">${d}</td><td class="mut">${Math.round(now - e.last)} ms</td></tr>`;
+  }).join('');
+}
+let simUiTimer = null;
+function renderSim() {
+  const r = SIM.ready(), P = simProfile;
+  const nowT = performance.now(), shifterSeen = USB && [...LL.ids].some(([id, e]) => (id & 0x1FFFFFFF) === MAVR_SHIFTER_ID && nowT - e.last < 1500);
+  const hasFrame = P.frames.some(f => f.on), tick = ok => ok ? '<span style="color:var(--ok)">✓</span>' : '<span style="color:var(--bad)">✗</span>';
+  let h = `<div class="card"><h2>Shifter simulator</h2>
+    <p class="small mut">Sends the shifter's frames in place of the factory shifter. Hold a pad button and it sends that button's bit, exactly like holding the real button. The button map for the Maverick R is already filled in.</p>
+    <ol class="small" style="line-height:1.8">
+      <li>${tick(LL.port && LL.on)} Adapter connected, bit rate set (Setup tab). Key ON.</li>
+      <li id="simStep3">${tick(USB && LL.port && !shifterSeen)} Unplug the factory shifter. ${shifterSeen ? '<b>0x345 is still on the bus.</b>' : LL.port ? '0x345 is not on the bus.' : ''}</li>
+      <li>${tick(simAllowed)} Tick Allow sending, press Start, then hold a pad button.</li>
+    </ol>
+    <p class="small mut">The shifter message (0x345, every 20 ms, counter + CRC) and the button bits are built in from the 2026-10-13 captures.</p>
+    ${SIM.msg ? `<div class="warn">Stopped: ${esc(SIM.msg)}</div>` : ''}
+    ${USB ? `<label class="row"><input type="checkbox" id="simAllow" ${simAllowed ? 'checked' : ''} ${SIM.armed ? 'disabled' : ''}> Allow sending on this page (off every time the page opens)</label>` : ''}
+    ${r.length && !SIM.armed ? '<ul class="small">' + r.map(x => '<li>' + esc(x) + '</li>').join('') + '</ul>' : ''}
+    ${SIM.armed ? '<button class="btn bad big" id="simStop">■ STOP SENDING (Esc)</button>' : `<button class="btn pri big" id="simArm" ${r.length ? 'disabled' : ''}>▶ Start simulator</button>`}
+    ${USB && LL.port ? `<button class="btn ${simRec ? 'bad' : ''}" id="simRec">${simRec ? '■ Stop recording and save' : '● Record this session'}</button>` : ''}
+    ${simLastRec ? `<div class="cand small">${esc(simLastRec.name)}: ${simLastRec.frames} frames, ${simLastRec.presses} presses${simLastRec.saved ? ', saved' : ''}.${simLastRec.top.length ? ' Bits that changed with your presses: ' + simLastRec.top.map(c => '<b class="mono">0x' + esc(c.id) + '</b> ' + c.byte + '.' + c.bit + ' (' + c.hit + '/' + c.acts + ')').join(', ') : ' No other ID reacted to the presses.'}</div>` : ''}
+  </div>`;
+  h += `<div class="card"><h2>Control pad</h2><p class="small mut">Momentary: sends while held. Keys: P R D N M L, O = override, ↑ ↓ = paddles, Esc = stop.</p><div class="pad">` +
+    SIM_BTNS.map(([k, label]) => { const e = parseEdits(P.buttons[k]).filter(x => !x.bad); return `<button class="padb ${e.length ? '' : 'unmapped'}" data-sb="${k}" ${SIM.armed && e.length ? '' : 'disabled'}><b>${esc(label)}</b><small>${e.length ? e.length + ' bit' + (e.length > 1 ? 's' : '') : 'not mapped'}</small></button>`; }).join('') + `</div></div>`;
+  h += `<div class="card"><h2>Live</h2><h3>Sending</h3><table><tr><th>ID</th><th>period</th><th>last data sent</th><th>sent</th></tr><tbody id="simSent"></tbody></table>
+    <h3>Watch (gear state, dash, etc.)</h3><input type="text" id="simW" placeholder="IDs to watch, hex, e.g. 1A0, 3C1" value="${esc(simWatch)}">
+    <table><tbody id="simWatchTbl"></tbody></table></div>`;
+  // profile: frames (advanced)
+  h += `<details class="card"><summary style="cursor:pointer;font-weight:600">Advanced: message details, learn from a capture, button map</summary>`;
+  const runs = allSteps().filter(s => progress[s.id] && progress[s.id].saved && progress[s.id].savedTo && s.kind !== 'check');
+  h += `<div><h2>Frames to send</h2>
+    ${simListen ? `<b>listening… <span id="simLiveLeft">${simListen.left}</span> s</b>` : `<button class="btn" id="simLiveBtn" ${LL.port && LL.on && !SIM.armed ? '' : 'disabled'}>Re-learn 0x345 from the bus (10 s)</button>`}
+    ${simLastLearn ? `<div class="cand mono small" style="white-space:pre-line">${esc(simLastLearn)}</div>` : ''}
+    <p class="small mut">Learn copies a frame from a capture: its period, normal data, rolling counter and checksum (found by testing the common checksum types against every frame). Edit anything after.</p>
+    <table><tr><th>on</th><th>ID</th><th>ms</th><th>DLC</th><th>data (hex)</th><th>counter</th><th>checksum</th><th></th></tr>` +
+    P.frames.map((f, i) => `<tr><td><input type="checkbox" data-fo="${i}" ${f.on ? 'checked' : ''}></td><td class="mono">0x${idStr(fullId(f))}</td>
+      <td><input type="text" data-fp="${i}" value="${f.period}" style="width:60px"></td><td>${f.dlc}</td>
+      <td><input type="text" data-fd="${i}" class="mono" value="${f.data.slice(0, f.dlc).map(b => hex(b, 2)).join(' ')}"></td>
+      <td class="small mono">${f.counter ? 'byte ' + f.counter.byte + ' &' + hex(f.counter.mask, 2) : 'none'}</td><td class="small mono">${esc(ckName(f.checksum))}</td>
+      <td><button class="btn bad" style="padding:4px 8px;font-size:13px" data-fx="${i}" ${SIM.armed ? 'disabled' : ''}>✕</button></td></tr>`).join('') + '</table>';
+  h += `<h3>Or learn a frame from a saved capture</h3>
+    <select id="simSrc"><option value="">choose a run…</option>${lastRun ? `<option value="__last">Last run in this page (${esc(lastRun.stepId)})</option>` : ''}${runs.map(s => `<option value="${s.id}">${s.id} ${esc(s.title)} (saved)</option>`).join('')}</select>
+    ${simLearn ? `<select id="simId">${simLearn.ids.map(x => `<option value="${x.id}">0x${idStr(x.id)} · ${x.hz.toFixed(0)} Hz · ${x.n} frames</option>`).join('')}</select><button class="btn pri" id="simLearnGo" ${SIM.armed ? 'disabled' : ''}>Learn this frame</button>` : ''}
+    <p class="small mut">The shifter's own frames are the IDs that went silent in S1-13 (shifter unplugged).</p></div>`;
+  // profile: buttons
+  h += `<div><h2>Button map</h2><p class="small mut">Filled by "→ Sim" on a test's results, or typed: <span class="mono">2F0:1.0=1</span> = ID 2F0, byte 1, bit 0 set to 1 while held. <span class="mono">2F0:3&0F=05</span> = byte 3, mask 0F, value 05. Several are separated by spaces.</p><table>` +
+    SIM_BTNS.map(([k, label]) => { const bad = parseEdits(P.buttons[k]).filter(x => x.bad); return `<tr><td><b>${esc(label)}</b></td><td><input type="text" class="mono" data-bm="${k}" value="${esc(P.buttons[k] || '')}">${bad.length ? '<div class="small" style="color:var(--bad)">Not understood: ' + bad.map(x => esc(x.bad)).join(' ') + '</div>' : ''}</td></tr>`; }).join('') +
+    `</table><button class="btn" id="simExp">⬇ Export profile</button><label class="btn">⬆ Import<input type="file" id="simImp" accept=".json" class="hide"></label>
+    <p class="small mut">${FS.ok() ? 'Auto-saved to ' + esc(FS.dir.name) + '\\shifter_sim_profile.json. This is also the starting data for the backup board firmware.' : 'Saved in this browser. Choose a save folder to keep it with the captures.'}</p></div>
+    <button class="btn" id="simReset">Reset to the built-in Maverick R profile</button></details>`;
+  $('#tab-sim').innerHTML = h;
+  $('#simReset').onclick = () => { if (confirm('Replace the frames and button map with the built-in Maverick R values?')) { simProfile.frames = [JSON.parse(JSON.stringify(MAVR_FRAME))]; simProfile.buttons = Object.assign({}, MAVR_BUTTONS); simSave(); renderSim(); } };
+  // bindings
+  const al = $('#simAllow'); if (al) al.onchange = () => { if (al.checked && !confirm('Allow this page to transmit on the vehicle CAN bus?\n\nNothing is sent until you press Start simulator, and the checks run again then.')) al.checked = false; simAllowed = al.checked; renderSim(); };
+  const ar = $('#simArm'); if (ar) ar.onclick = () => SIM.arm();
+  const sp = $('#simStop'); if (sp) sp.onclick = () => SIM.stop('STOP pressed');
+  const rc = $('#simRec'); if (rc) rc.onclick = () => simRecToggle().catch(e => alert(e.message));
+  document.querySelectorAll('[data-sb]').forEach(b => {
+    const k = b.dataset.sb;
+    b.onpointerdown = e => { e.preventDefault(); b.setPointerCapture(e.pointerId); SIM.press(k); };
+    b.onpointerup = b.onpointercancel = b.onlostpointercapture = () => SIM.release(k);
+    b.oncontextmenu = e => e.preventDefault();
+  });
+  $('#simW').oninput = () => { simWatch = $('#simW').value; store.set('simWatch', simWatch); };
+  document.querySelectorAll('[data-fo]').forEach(c => c.onchange = () => { P.frames[+c.dataset.fo].on = c.checked; simSave(); });
+  document.querySelectorAll('[data-fp]').forEach(c => c.onchange = () => { const v = Math.max(5, parseInt(c.value) || 100); P.frames[+c.dataset.fp].period = v; c.value = v; simSave(); });
+  document.querySelectorAll('[data-fd]').forEach(c => c.onchange = () => { const f = P.frames[+c.dataset.fd], b = c.value.replace(/[^0-9a-f]/gi, '').match(/../g) || []; for (let i = 0; i < 8; i++) f.data[i] = i < b.length ? parseInt(b[i], 16) : f.data[i]; simSave(); renderSim(); });
+  document.querySelectorAll('[data-fx]').forEach(c => c.onclick = () => { if (confirm('Remove this frame from the simulator?')) { P.frames.splice(+c.dataset.fx, 1); simSave(); renderSim(); } });
+  document.querySelectorAll('[data-bm]').forEach(c => c.onchange = () => { P.buttons[c.dataset.bm] = c.value.trim(); simSave(); renderSim(); });
+  const lb = $('#simLiveBtn'); if (lb) lb.onclick = () => simLearnLive().catch(e => { simListen = null; renderSim(); alert(e.message); });
+  $('#simSrc').onchange = async () => {
+    const v = $('#simSrc').value; simLearn = null;
+    if (v === '__last' && lastRun) simLearn = { frames: lastRun.frames, src: lastRun.stepId };
+    else if (v) { const p = progress[v]; const t = await FS.read(p.files[0]); if (!t) { alert('Could not read ' + p.files[0]); return; } simLearn = { frames: parseSavvy(t), src: v }; }
+    if (simLearn) { const a = analyse(simLearn.frames, [], []); simLearn.ids = a.ids.filter(x => !(x.id & 0x20000000)); }
+    renderSim(); if (v) $('#simSrc').value = v;
+  };
+  const lg = $('#simLearnGo'); if (lg) lg.onclick = () => simLearnApply(+$('#simId').value >>> 0, false);
+  $('#simExp').onclick = () => download('shifter_sim_profile.json', JSON.stringify(P, null, 1), 'application/json');
+  $('#simImp').onchange = async e => { const f = e.target.files[0]; if (!f) return; try { const j = JSON.parse(await f.text()); if (!Array.isArray(j.frames)) throw new Error('not a profile'); simProfile = j; simSave(); renderSim(); } catch (x) { alert('Import failed: ' + x.message); } };
+  simLive();
+  clearInterval(simUiTimer); simUiTimer = setInterval(() => { if (curTab !== 'sim') { clearInterval(simUiTimer); return; } if (!SIM.armed) simLive(); }, 250);
+}
+
+// ---------------- setup
+function renderSetup() {
+  const bitCard = `<div class="card"><h2>Bit rate</h2>
+    <p class="small mut">Key ON so the bus is awake. Auto tries 500, 250, 1000 and 125 kbps in listen-only mode. A wrong rate can't disturb the car.</p>
+    <button class="btn pri" id="auto">Find bit rate</button>
+    <select id="kb"><option value="500">500 kbps</option><option value="250">250 kbps</option><option value="1000">1 Mbps</option><option value="125">125 kbps</option></select>
+    <button class="btn" id="setk">Set manually</button><p id="kres" class="small"></p></div>`;
+  if (USB) {
+    $('#tab-setup').innerHTML = `<div class="card"><h2>USB CAN adapter</h2>
+    <p class="small">${LL.port ? '✓ Connected · ' + esc(LL.info) + (LL.ver ? ' · fw ' + esc(LL.ver) : '') + (LL.on ? ' · listen-only at ' + LL.kbps + ' kbps' : ' · <b>bus closed</b>') : 'Not connected.'}</p>
+    ${linkOk() ? '' : '<div class="warn">This browser cannot reach USB devices this way. Use Chrome' + (IS_ANDROID ? '' : ' or Edge') + ', or switch the connection type below.</div>'}
+    <p class="small">Connection type: <select id="linkSel" style="width:auto;padding:4px"><option value="serial" ${LINK === 'serial' ? 'selected' : ''}>Serial port (PC)</option><option value="usb" ${LINK === 'usb' ? 'selected' : ''}>Direct USB (Android)</option></select></p>
+    <button class="btn pri" id="ucon">${LL.port ? 'Reconnect / pick another' : 'Connect adapter'}</button>${LL.port ? '<button class="btn" id="udis">Disconnect</button>' : ''}
+    <p class="small mut">Pick the adapter's COM port (it shows as "USB Serial Device"). The app sends C, S6 (500k), M1 (listen-only) then O. Close SavvyCAN or any serial monitor first: only one program can hold the port.</p></div>
+    ${bitCard}
+    <div class="card"><h2>Auto-save folder</h2>
+    <p class="small">${FS.ok() ? '✓ Auto-saving to <b>' + esc(FS.dir.name) + '</b>' + (FS.lastSave ? ' · last write ' + FS.lastSave.toLocaleTimeString() : '') : FS.dir ? 'Paused: Chrome needs a click to keep writing to <b>' + esc(FS.dir.name) + '</b>.' : 'Off. Files only download when you click Save.'}</p>
+    ${FS.supported ? (FS.dir && !FS.ok() ? '<button class="btn pri" id="sres">Resume saving</button>' : '') + '<button class="btn ' + (FS.dir ? '' : 'pri') + '" id="sdir">' + (FS.dir ? 'Change folder' : 'Choose folder (e.g. CAN Captures)') + '</button>' + (FS.dir ? '<button class="btn" id="ndir">Stop auto-save</button>' : '') : ''}
+    <p class="small mut">Use one folder per capture session. Each test writes <span class="mono">&lt;id&gt;_&lt;name&gt;.csv</span> and <span class="mono">_markers.csv</span>; a redo overwrites them. session.json and Session_Summary.csv update on every change. While recording, a checkpoint goes to _recovery every 10 s. Opening a folder that already has a session.json picks that session up where it left off.</p></div>
+    <div class="card"><h2>Hook-up</h2><table>
+    <tr><th>Adapter</th><th>Connect to</th></tr>
+    <tr><td>CAN H</td><td>Vehicle CAN H (back-probe)</td></tr><tr><td>CAN L</td><td>Vehicle CAN L</td></tr>
+    <tr><td>GND</td><td>Vehicle ground (on the isolated RH02 Pro this is the isolated CAN ground)</td></tr></table>
+    <div class="warn">Termination jumper/switch OFF. The car's bus is already terminated.</div>
+    <ul class="small"><li>A laptop on battery is best: no charger ground loop to the vehicle.</li>
+    <li>Keep this tab in front during runs. Recording continues in the background, but the beeps need the tab.</li>
+    <li>Frame times are stamped when the PC receives them (about ±1–2 ms). Markers use the same clock.</li></ul></div>`;
+    $('#ucon').onclick = async () => { await usbConnect(); renderSetup(); };
+    $('#linkSel').onchange = async () => { if (LL.port) await LL.disconnect(); setLink($('#linkSel').value); pollStatus(); renderSetup(); };
+    const ud = $('#udis'); if (ud) ud.onclick = async () => { await LL.disconnect(); pollStatus(); renderSetup(); };
+    const sd = $('#sdir'); if (sd) sd.onclick = async () => { await FS.choose(); renderSetup(); };
+    const sr = $('#sres'); if (sr) sr.onclick = async () => { await FS.resume(); renderSetup(); };
+    const nd = $('#ndir'); if (nd) nd.onclick = async () => { if (confirm('Stop auto-saving to ' + FS.dir.name + '? Files already there stay.')) { await FS.forget(); renderSetup(); } };
+  } else {
+    $('#tab-setup').innerHTML = bitCard + `<div class="card"><h2>Wiring</h2><table>
+    <tr><th>SN65HVD230</th><th>Connect to</th></tr>
+    <tr><td>3V3</td><td>XIAO 3V3</td></tr><tr><td>GND</td><td>XIAO GND and vehicle CAN ground</td></tr>
+    <tr><td>CRX (R)</td><td>XIAO D3 (GPIO4)</td></tr><tr><td>CTX (D)</td><td><b>3V3</b>: transmitter held off</td></tr>
+    <tr><td>CANH / CANL</td><td>Vehicle CAN H / CAN L (back-probe)</td></tr></table>
+    <div class="warn">Remove the breakout's 120 Ω terminator. The car's bus is already terminated.</div></div>
+    <div class="card"><h2>Tips</h2><ul class="small">
+    <li>Set the phone's screen timeout to 10 min so it stays awake during runs.</li>
+    <li>Turn the volume up: a high beep means "do it now".</li>
+    <li>Save files after every run. The logger keeps only the most recent run.</li>
+    <li>Wi-Fi: MavR-CAN · password shifter26 · http://192.168.4.1</li></ul></div>`;
+  }
+  $('#kb').value = String(USB ? LL.kbps : (status && status.kbps) || 500);
+  $('#auto').onclick = async () => { $('#kres').textContent = 'Searching…'; try { const r = await api('/api/bitrate', 'POST', { kbps: 0 }); $('#kres').textContent = r.found ? 'Found ' + r.found + ' kbps' : 'No traffic at any rate. Key on? Wiring?'; if (r.found) $('#kb').value = String(r.found); } catch (e) { $('#kres').textContent = e.message; } pollStatus(); };
+  $('#setk').onclick = async () => { try { const r = await api('/api/bitrate', 'POST', { kbps: $('#kb').value }); $('#kres').textContent = 'Set to ' + r.kbps + ' kbps'; } catch (e) { $('#kres').textContent = e.message; } pollStatus(); };
+}
+if (USB) { document.title = 'MavR CAN Capture (USB)'; $('.brand b').textContent = 'MavR CAN Capture · USB'; }
+
+window.addEventListener('beforeunload', e => { if (runner) { e.preventDefault(); e.returnValue = ''; } });
+refreshSaveUi(); FS.restore();
+renderPlan();
+</script>
+</body>
+</html>
