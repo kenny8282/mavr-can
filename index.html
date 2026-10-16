@@ -1190,9 +1190,12 @@ const MAVR_SHIFTER_ID = 0x345, MAVR_WATCH = '309 530 227';
 // byte 0 = buttons, bytes 1-5 = 0, byte 6 = counter 0..15, byte 7 = CRC-8 SAE J1850 (poly 1D, init FF, xor FF) over bytes 0-6.
 const MAVR_FRAME = { on: true, id: 0x345, ext: false, period: 20, dlc: 8, data: [0, 0, 0, 0, 0, 0, 0, 0], counter: { byte: 6, mask: 0x0F },
   checksum: { alg: 'crc8', poly: 0x1D, init: 0xFF, xorout: 0xFF, withId: false, byte: 7 }, source: 'S1-3 2026-10-13', frames: 2860 };
+const MAVR_PROFILE_VER = 2;   // bump when the built-in frame or button map changes: saved profiles older than this are replaced
 let simProfile = store.get('sim', { updated: '', frames: [], buttons: {} });
-if (!Object.keys(simProfile.buttons || {}).length) simProfile.buttons = Object.assign({}, MAVR_BUTTONS);
-if (!simProfile.frames.length) simProfile.frames = [JSON.parse(JSON.stringify(MAVR_FRAME))];
+if ((simProfile.ver || 0) < MAVR_PROFILE_VER) {
+  simProfile = { ver: MAVR_PROFILE_VER, updated: new Date().toISOString(), frames: [JSON.parse(JSON.stringify(MAVR_FRAME))], buttons: Object.assign({}, MAVR_BUTTONS) };
+  store.set('sim', simProfile);
+}
 let simAllowed = false;            // "Allow sending" — per page load, never remembered
 let simSaveTimer = null, simRec = null, simLearn = null, simWatch = store.get('simWatch', MAVR_WATCH);
 
@@ -1202,7 +1205,7 @@ function simSave() {
 }
 async function simLoadFromFolder() {
   const t = await FS.read('shifter_sim_profile.json'); if (!t) { if (simProfile.frames.length) simSave(); return; }
-  try { const j = JSON.parse(t); if ((j.updated || '') > (simProfile.updated || '')) { simProfile = j; store.set('sim', j); } else if ((j.updated || '') < (simProfile.updated || '')) simSave(); } catch (e) {}
+  try { const j = JSON.parse(t); if ((j.ver || 0) >= MAVR_PROFILE_VER && (j.updated || '') > (simProfile.updated || '')) { simProfile = j; store.set('sim', j); } else simSave(); } catch (e) {}
 }
 function fullId(f) { return ((f.ext ? 0x80000000 : 0) | (f.id & 0x1FFFFFFF)) >>> 0; }
 function parseEdits(spec) {
@@ -1336,7 +1339,7 @@ const SIM = {
   },
   tick() {
     const now = performance.now();
-    if (now - this.last > 500) { this.stop('Timing stalled (' + Math.round(now - this.last) + ' ms). The frames must keep their rate, so sending stopped.'); return; }
+    if (now - this.last > 2000) { this.stop('Timing stalled (' + Math.round(now - this.last) + ' ms). The frames must keep their rate, so sending stopped.'); return; }
     this.last = now;
     simProfile.frames.forEach((f, i) => {
       if (!f.on) return;
@@ -1428,7 +1431,7 @@ let simLastRec = null;
 //  Speed    0x344 bytes 2-3 big-endian, 0.01 km/h (100 Hz). Zero at a stop; the 5/10/20 mph holds read 6.2/10.4/21.1 mph.
 //  Gear     0x309 byte 0 bits 6-7: 3 = P, 2 = N, 0 = D, 1 = R. Bits 4-5 = range (2 = High, 1 = Low). Low nibble = gear number in D.
 //           Byte 2 bits 0-1 = brake (3 = pressed). Byte 3 bits 0-1 = mode (1 = auto, 2 = manual). Polarities for Low/Manual are
-//           inferred from which bits flipped in S1-5/S1-6/S2-8; confirm on the car.
+//           confirmed in S2-5 / S2-8 / S1-11. Byte 3 = 0C = shifter fault (0x345 missing > 4 s; clears 2 s after it returns).
 //  Throttle 0x103 byte 0, 0-255 = 0-100 % pedal.
 const DECODE = {
   rpm:   { id: 0x102, hi: 0, lo: 1, scale: 0.25, offset: 0, max: 9000 },
@@ -1443,6 +1446,7 @@ const DASH_OUT = [
   { id: 0x309, byte: 3, mask: 0x03, on: 0x02, label: 'MAN', note: 'manual mode, 0x309 b3 = 2 (1 = auto)' },
   { id: 0x309, byte: 0, mask: 0x30, on: 0x10, label: 'LOW', note: 'low range, 0x309 b0 bits 4-5 = 1 (2 = high)' },
   { id: 0x103, byte: 2, bit: 3, label: 'REF', note: 'request refused, 0x103 b2.3' },
+  { id: 0x309, byte: 3, mask: 0xFF, on: 0x0C, label: 'FAULT', note: 'shifter fault: 0x309 b3 = 0C, set 4 s after 0x345 stops, clears 2 s after it resumes (S1-13, S2-10)' },
   { id: 0x100, byte: 1, bit: 7, label: 'RUN', note: 'engine running?, 0x100 b1.7 (S2-0)' },
 ];
 function dashFrame(id) {
@@ -1558,7 +1562,7 @@ function renderSim() {
     <p class="small mut">${FS.ok() ? 'Auto-saved to ' + esc(FS.dir.name) + '\\shifter_sim_profile.json. This is also the starting data for the backup board firmware.' : 'Saved in this browser. Choose a save folder to keep it with the captures.'}</p></div>
     <button class="btn" id="simReset">Reset to the built-in Maverick R profile</button></details>`;
   $('#tab-sim').innerHTML = h;
-  $('#simReset').onclick = () => { if (confirm('Replace the frames and button map with the built-in Maverick R values?')) { simProfile.frames = [JSON.parse(JSON.stringify(MAVR_FRAME))]; simProfile.buttons = Object.assign({}, MAVR_BUTTONS); simSave(); renderSim(); } };
+  $('#simReset').onclick = () => { if (confirm('Replace the frames and button map with the built-in Maverick R values?')) { simProfile = { ver: MAVR_PROFILE_VER, updated: '', frames: [JSON.parse(JSON.stringify(MAVR_FRAME))], buttons: Object.assign({}, MAVR_BUTTONS) }; simSave(); renderSim(); } };
   // bindings
   const al = $('#simAllow'); if (al) al.onchange = () => { if (al.checked && !confirm('Allow this page to transmit on the vehicle CAN bus?\n\nNothing is sent until you press Start simulator, and the checks run again then.')) al.checked = false; simAllowed = al.checked; renderSim(); };
   const ar = $('#simArm'); if (ar) ar.onclick = () => SIM.arm();
@@ -1586,7 +1590,7 @@ function renderSim() {
   };
   const lg = $('#simLearnGo'); if (lg) lg.onclick = () => simLearnApply(+$('#simId').value >>> 0, false);
   $('#simExp').onclick = () => download('shifter_sim_profile.json', JSON.stringify(P, null, 1), 'application/json');
-  $('#simImp').onchange = async e => { const f = e.target.files[0]; if (!f) return; try { const j = JSON.parse(await f.text()); if (!Array.isArray(j.frames)) throw new Error('not a profile'); simProfile = j; simSave(); renderSim(); } catch (x) { alert('Import failed: ' + x.message); } };
+  $('#simImp').onchange = async e => { const f = e.target.files[0]; if (!f) return; try { const j = JSON.parse(await f.text()); if (!Array.isArray(j.frames)) throw new Error('not a profile'); if ((j.ver || 0) < MAVR_PROFILE_VER && !confirm('This profile is older than the built-in Maverick R decode (its button map may be wrong). Import anyway?')) return; j.ver = MAVR_PROFILE_VER; simProfile = j; simSave(); renderSim(); } catch (x) { alert('Import failed: ' + x.message); } };
   simLive();
   clearInterval(simUiTimer); simUiTimer = setInterval(() => { if (curTab !== 'sim') { clearInterval(simUiTimer); return; } if (!SIM.armed) simLive(); }, 250);
 }
